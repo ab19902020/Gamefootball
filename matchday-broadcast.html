@@ -257,11 +257,11 @@ const TEAMS = [
   { name:'NORTHGATE', abbr:'NOR', shirt:'#16307d', trim:'#f3f6ff', shorts:'#f3f6ff',
     socks:'#16307d', sleeve:'#0f2260', pattern:'pinstripe', radar:'#5b8bff', chip:'#16307d',
     sponsor:BRAND.name, sponsorInk:'#ffffff', numberInk:'#ffffff',
-    names:['HOLT','BRENNAN','VOSS','KEATING','ADEYEMI','SANDERS','MARCHETTI','OKONKWO','LINDQVIST','REYES','BAPTISTE'] },
+    formation:'4-3-3', mentality:'Balanced', quality:13, squad:null },
   { name:'VALEMONT', abbr:'VAL', shirt:'#b02024', trim:'#1a1a1f', shorts:'#1a1a1f',
     socks:'#b02024', sleeve:'#8c161a', pattern:'stripe', radar:'#ff6b6b', chip:'#b02024',
     sponsor:'THE RESULTS BUSINESS', sponsorInk:'#ffffff', numberInk:'#ffffff',
-    names:['DUARTE','FALK','NAKAMURA','ROSSI','ELLIOTT','KOVAC','TRAORE','MENDES','HALVORSEN','CRUZ','WEBB'] }
+    formation:'4-4-2', mentality:'Balanced', quality:13, squad:null }
 ];
 const GK_KITS = [
   { shirt:'#1fbf7a', trim:'#0d2a1e', shorts:'#0d2a1e', socks:'#1fbf7a', sleeve:'#17a066',
@@ -270,21 +270,193 @@ const GK_KITS = [
     pattern:'none', numberInk:'#241a06' }
 ];
 
-const FORMATION = [
-  ['GK', -0.97,  0.00],
-  ['LB', -0.60, -0.80], ['CB', -0.76, -0.26], ['CB', -0.76, 0.26], ['RB', -0.60, 0.80],
-  ['DM', -0.34,  0.00], ['CM', -0.12, -0.44], ['CM', -0.12, 0.44],
-  ['LW',  0.36, -0.78], ['ST',  0.50,  0.00], ['RW',  0.36, 0.78]
-];
+/* The manager stores a shape as x along the length (0-100) and y across
+   the width (0-68). This engine works in -1..1 either way, measured from
+   the centre spot, so a shape converts once on load and never again. */
+function slotVec(x, y){
+  return { x: THREE.MathUtils.clamp((x-50)/50, -0.98, 0.98),
+           y: THREE.MathUtils.clamp((y-34)/34, -0.95, 0.95) };
+}
+
+/* Fill in anything a caller did not supply: a shape from the formation
+   table, names from the pool, a physique from the position group and a
+   full attribute set at the club's level. Called for both sides at
+   kick-off, so a standalone match still has eleven real players a side. */
+function buildSquad(t){
+  const T = TEAMS[t];
+  const shape = FORMATIONS[T.formation] || FORMATIONS['4-3-3'];
+  const supplied = T.squad || [];
+  const squad = [];
+  for(let i=0;i<11;i++){
+    const [slot, fx, fy] = shape[i];
+    const given = supplied[i] || {};
+    const grp = SLOT_GROUP[given.slot || slot] || 'M';
+    const a = ANTHRO[grp];
+    const ph = given.heightCm && given.weightKg
+      ? { h: THREE.MathUtils.clamp(given.heightCm,150,215)/100,
+          w: THREE.MathUtils.clamp(given.weightKg,45,130) }
+      : { h: THREE.MathUtils.clamp(a.h + gauss()*a.hsd, 166, 203)/100,
+          w: THREE.MathUtils.clamp(a.w + gauss()*a.wsd, 58, 104) };
+    const bmi = ph.w/(ph.h*ph.h);
+    squad.push({
+      pid:   given.id != null ? String(given.id) : T.abbr+'-'+i,
+      name:  (given.name || (NAME_POOL[t%2]||NAME_POOL[0])[i] || 'PLAYER').toUpperCase(),
+      num:   given.number || given.shirt || (i+1),
+      slot:  given.slot || slot,
+      pos:   given.pos ? slotVec(given.pos[0], given.pos[1]) : slotVec(fx, fy),
+      h: ph.h, w: ph.w,
+      build: THREE.MathUtils.clamp(1 + (bmi-22.4)*0.030, 0.86, 1.15),
+      attrs: given.attrs || rollAttrs(given.slot || slot, T.quality || 12)
+    });
+  }
+  T.squad = squad;
+  return squad;
+}
 
 const S = {
   phase:'menu', clock:0, half:1, halfLen:240, score:[0,0],
   aiSkill:0.86, offsideOn:true, freeze:0, restart:null,
   possTeam:1, lastTouch:null, pendingOffside:null, running:false,
   dir:[1,-1], speed:1, quality:1,
-  stats:{ poss:[0,0], shots:[0,0], onTarget:[0,0], corners:[0,0] },
+  stats:{ poss:[0,0], shots:[0,0], onTarget:[0,0], corners:[0,0] }, stoppage:0,
   camMode:'auto', camShot:'broadcast', camHold:0, focus:null
 };
+
+/* =====================================================================
+   ATTRIBUTES AND SQUADS — the seam the manager game plugs into
+   ---------------------------------------------------------------------
+   Nothing in the match logic below invents a player's ability any more.
+   Every decision — how hard he can run, whether a pass finds its man,
+   whether he shoots or squares it, whether a tackle wins the ball, what
+   the keeper gets a hand to — is read out of the same nineteen
+   attributes The Results Business already stores, on the same 1-20
+   scale, under the same names:
+
+     passing shooting dribbling tackling crossing firstTouch heading
+     positioning vision workRate decisions composure aggression
+     leadership pace acceleration stamina strength agility
+
+   Four goalkeeping attributes and two outfield ones are DERIVED rather
+   than stored, exactly as the manager derives them: handling, reflexes,
+   oneOnOnes and distribution for keepers, offTheBall and marking for
+   everyone else. They blend the attributes a player already has with a
+   variation seeded on his own id, so two identically-rated keepers are
+   still different keepers and no save file has to change.
+
+   A 20-rated passer misplaces almost nothing. A 3-rated passer gives it
+   away. That is the whole point of the exercise, and it is worth knowing
+   that the spread is deliberately wide: see PASS_ERR below.
+   ===================================================================== */
+
+const ATTR_KEYS = ['passing','shooting','dribbling','tackling','crossing','firstTouch',
+  'heading','positioning','vision','workRate','decisions','composure','aggression',
+  'leadership','pace','acceleration','stamina','strength','agility'];
+
+/* The manager's position slots, and how each one plays here. */
+const SLOT_GROUP = {GK:'GK', DL:'D',DC:'D',DR:'D',WBL:'D',WBR:'D',
+  DM:'M',MC:'M',ML:'M',MR:'M',AMC:'M', AML:'F',AMR:'F',ST:'F'};
+const SLOT_WIDE = {DL:1,DR:1,WBL:1,WBR:1,ML:1,MR:1,AML:1,AMR:1};
+const SLOT_FWD  = {ST:1,AML:1,AMR:1,AMC:1};
+const SLOT_DEF  = {DL:1,DC:1,DR:1,WBL:1,WBR:1};
+
+/* Position emphasis, same shape and much the same numbers as the
+   manager's W table — used to generate a plausible standalone squad
+   when nothing has been loaded. Real squads overwrite all of it. */
+const SLOT_W = {
+  GK:{passing:.7,shooting:.15,dribbling:.2,tackling:.2,crossing:.1,firstTouch:.6,heading:.4,positioning:1.25,vision:.6,workRate:.7,decisions:1.05,composure:1.05,aggression:.5,leadership:.9,pace:.5,acceleration:.5,stamina:.6,strength:.9,agility:1.3},
+  DL:{passing:.95,shooting:.4,dribbling:.85,tackling:1.15,crossing:1.1,firstTouch:.9,heading:.8,positioning:1.1,vision:.8,workRate:1.15,decisions:1,composure:.9,aggression:.95,leadership:.8,pace:1.1,acceleration:1.05,stamina:1.15,strength:.9,agility:.95},
+  DC:{passing:.85,shooting:.3,dribbling:.55,tackling:1.3,crossing:.35,firstTouch:.8,heading:1.3,positioning:1.3,vision:.7,workRate:.95,decisions:1.15,composure:1,aggression:1.05,leadership:1.05,pace:.9,acceleration:.85,stamina:.9,strength:1.25,agility:.8},
+  DM:{passing:1.1,shooting:.55,dribbling:.8,tackling:1.25,crossing:.5,firstTouch:1,heading:.95,positioning:1.25,vision:1,workRate:1.2,decisions:1.2,composure:1.05,aggression:1,leadership:.95,pace:.85,acceleration:.85,stamina:1.15,strength:1.05,agility:.85},
+  MC:{passing:1.2,shooting:.8,dribbling:1,tackling:.95,crossing:.7,firstTouch:1.1,heading:.7,positioning:1,vision:1.15,workRate:1.1,decisions:1.15,composure:1.05,aggression:.8,leadership:.9,pace:.85,acceleration:.9,stamina:1.15,strength:.9,agility:.9},
+  ML:{passing:1.05,shooting:.8,dribbling:1.15,tackling:.8,crossing:1.2,firstTouch:1.05,heading:.6,positioning:.9,vision:1,workRate:1.1,decisions:.95,composure:.9,aggression:.7,leadership:.7,pace:1.15,acceleration:1.15,stamina:1.1,strength:.75,agility:1.05},
+  AMC:{passing:1.25,shooting:1.05,dribbling:1.15,tackling:.55,crossing:.75,firstTouch:1.2,heading:.55,positioning:.85,vision:1.3,workRate:.9,decisions:1.15,composure:1.1,aggression:.6,leadership:.85,pace:.9,acceleration:1,stamina:.95,strength:.75,agility:1.05},
+  AML:{passing:1,shooting:1.05,dribbling:1.3,tackling:.5,crossing:1.1,firstTouch:1.15,heading:.55,positioning:.8,vision:1,workRate:.9,decisions:.95,composure:1,aggression:.6,leadership:.65,pace:1.3,acceleration:1.3,stamina:1,strength:.7,agility:1.15},
+  ST:{passing:.8,shooting:1.35,dribbling:1.05,tackling:.35,crossing:.5,firstTouch:1.2,heading:1.1,positioning:1.05,vision:.85,workRate:.9,decisions:1,composure:1.25,aggression:.85,leadership:.75,pace:1.15,acceleration:1.15,stamina:.95,strength:1.05,agility:1}
+};
+SLOT_W.DR=SLOT_W.DL; SLOT_W.WBL={...SLOT_W.DL,crossing:1.25,stamina:1.3,pace:1.2};
+SLOT_W.WBR=SLOT_W.WBL; SLOT_W.MR=SLOT_W.ML; SLOT_W.AMR=SLOT_W.AML;
+
+/* The manager's five formations, verbatim: [slot, x along the length
+   0-100, y across the width 0-68]. Converted to this engine's -1..1
+   slot space on load. */
+const FORMATIONS = {
+ '4-4-2':[['GK',6,34],['DL',22,7],['DC',19,25],['DC',19,43],['DR',22,61],['ML',49,7],['MC',45,26],['MC',45,42],['MR',49,61],['ST',76,27],['ST',76,41]],
+ '4-3-3':[['GK',6,34],['DL',23,7],['DC',19,25],['DC',19,43],['DR',23,61],['DM',38,34],['MC',52,21],['MC',52,47],['AML',73,9],['ST',80,34],['AMR',73,59]],
+ '3-5-2':[['GK',6,34],['DC',20,17],['DC',18,34],['DC',20,51],['WBL',44,6],['DM',40,34],['MC',54,23],['MC',54,45],['WBR',44,62],['ST',77,27],['ST',77,41]],
+ '4-2-3-1':[['GK',6,34],['DL',23,7],['DC',19,25],['DC',19,43],['DR',23,61],['DM',40,26],['DM',40,42],['AML',66,9],['AMC',63,34],['AMR',66,59],['ST',81,34]],
+ '5-3-2':[['GK',6,34],['WBL',36,6],['DC',19,20],['DC',17,34],['DC',19,48],['WBR',36,62],['MC',51,23],['DM',44,34],['MC',51,45],['ST',77,27],['ST',77,41]]
+};
+const MENT_MOD = {
+  Defensive:{poss:.92,att:.86,def:1.14,line:-0.12,shoot:.85,direct:1.15,press:.9},
+  Counter:  {poss:.97,att:.95,def:1.06,line:-0.06,shoot:.95,direct:1.30,press:.95},
+  Balanced: {poss:1,   att:1,   def:1,   line:0,    shoot:1,   direct:1,   press:1},
+  Attacking:{poss:1.05,att:1.09,def:.93,line:0.08, shoot:1.10,direct:.95,press:1.10},
+  Overload: {poss:1.10,att:1.18,def:.84,line:0.15, shoot:1.22,direct:.90,press:1.20}
+};
+
+function hashStr(text){
+  let v = 2166136261;
+  const s = String(text||'x');
+  for(let i=0;i<s.length;i++){ v ^= s.charCodeAt(i); v = Math.imul(v, 16777619); }
+  return v >>> 0;
+}
+/* 0..1, stable for a given player and key — the "personal variation"
+   that stops two identically-rated players deriving identically. */
+function seedVar(p, key){
+  return ((hashStr((p.pid||p.name||'p')+':'+key) % 1000) / 1000);
+}
+
+const DERIVED = {
+  handling:    p => 0.55*A(p,'positioning') + 0.25*A(p,'agility')    + 0.20*A(p,'composure'),
+  reflexes:    p => 0.55*A(p,'agility')     + 0.25*A(p,'positioning') + 0.20*A(p,'decisions'),
+  oneOnOnes:   p => 0.45*A(p,'positioning') + 0.30*A(p,'composure')  + 0.25*A(p,'agility'),
+  distribution:p => 0.60*A(p,'passing')     + 0.25*A(p,'vision')     + 0.15*A(p,'firstTouch'),
+  offTheBall:  p => 0.45*A(p,'positioning') + 0.30*A(p,'decisions')  + 0.25*A(p,'workRate'),
+  marking:     p => 0.50*A(p,'positioning') + 0.30*A(p,'decisions')  + 0.20*A(p,'tackling')
+};
+
+/* Raw stored attribute, 1-20. */
+function A(p, key){
+  const v = p && p.attrs ? p.attrs[key] : null;
+  return (typeof v === 'number' && isFinite(v)) ? Math.max(1, Math.min(20, v)) : 10;
+}
+/* Stored or derived, 1-20. Everything in the match logic asks through
+   here, so a keeper asked for agility answers with his hands. */
+function effA(p, key){
+  if(p && p.attrs && typeof p.attrs[key] === 'number') return A(p, key);
+  const d = DERIVED[key];
+  if(!d) return 10;
+  if(p && p._derived && p._derived[key] != null) return p._derived[key];
+  const base = d(p);
+  const val = Math.max(1, Math.min(20, base*0.88 + seedVar(p,key)*4.2));
+  if(p){ (p._derived || (p._derived = {}))[key] = val; }
+  return val;
+}
+/* Normalised 0..1 — 1 is a 20, 0 is a 1. */
+function A01(p, key){ return (effA(p,key) - 1) / 19; }
+/* A weighted blend of several attributes, 0..1. */
+function Amix(p, spec){
+  let sum = 0, w = 0;
+  for(const k in spec){ sum += A01(p,k)*spec[k]; w += spec[k]; }
+  return w ? sum/w : 0.5;
+}
+
+/* Generate a believable attribute set for a standalone match. `quality`
+   is the club's level, roughly the squad's average rating. */
+function rollAttrs(slot, quality){
+  const W = SLOT_W[slot] || SLOT_W.MC, out = {};
+  for(const k of ATTR_KEYS){
+    const emphasis = W[k] == null ? 1 : W[k];
+    // emphasis moves the mean; every player still gets his own spread
+    const mean = quality * (0.55 + emphasis*0.45);
+    out[k] = Math.max(1, Math.min(20, Math.round(mean + gauss()*2.1)));
+  }
+  return out;
+}
+const NAME_POOL = [
+  ['HOLT','BRENNAN','VOSS','KEATING','ADEYEMI','SANDERS','MARCHETTI','OKONKWO','LINDQVIST','REYES','BAPTISTE'],
+  ['DUARTE','FALK','NAKAMURA','ROSSI','ELLIOTT','KOVAC','TRAORE','MENDES','HALVORSEN','CRUZ','WEBB']
+];
 
 /* ================== renderer ================== */
 const canvas = document.getElementById('scene');
@@ -317,49 +489,122 @@ function tex(c, rx, ry){
   return t;
 }
 
+/* =====================================================================
+   THE PITCH
+
+   A groundsman's roller lays the grass toward or away from you, and the
+   pattern he walks is a choice: up and down the length, across the
+   width, a checkerboard from two passes at right angles, or diagonals.
+   PITCH_CUTS holds those four, one is drawn at random per match, and the
+   base green and the amount of wear move with it — so two matches in the
+   same stadium do not look like the same afternoon.
+
+   No branding is mown into the turf: this is a normal football pitch.
+   ===================================================================== */
+const PITCH_CUTS = [
+  {id:'lengthwise', label:'STRIPES'},
+  {id:'crosswise',  label:'CROSS-CUT'},
+  {id:'check',      label:'CHECKERBOARD'},
+  {id:'diagonal',   label:'DIAGONALS'}
+];
+const PITCH = {
+  cut:   PITCH_CUTS[(Math.random()*PITCH_CUTS.length)|0],
+  hue:   Math.random(),          // 0 = cool blue-green, 1 = warm yellow-green
+  wear:  0.55 + Math.random()*0.75,
+  bands: 0
+};
+function rollPitch(){
+  PITCH.cut  = PITCH_CUTS[(Math.random()*PITCH_CUTS.length)|0];
+  PITCH.hue  = Math.random();
+  PITCH.wear = 0.55 + Math.random()*0.75;
+}
+/* Re-cut the grass for a new match. The old texture is disposed rather
+   than left on the GPU, because a long session would otherwise leak a
+   4MB canvas per kick-off. */
+function reskinPitch(){
+  rollPitch();
+  if(!TEX.turf) return;
+  const old = TEX.turf.material.map;
+  TEX.turf.material.map = pitchTexture();
+  TEX.turf.material.needsUpdate = true;
+  if(old && old.dispose) old.dispose();
+}
+
 function pitchTexture(){
   const M=6, ppm=18;
   const c = cv(Math.round((CFG.L+M*2)*ppm), Math.round((CFG.W+M*2)*ppm)), g = c.getContext('2d');
   const px = x=>(x+HALF_L+M)*ppm, py = z=>(z+HALF_W+M)*ppm;
-  g.fillStyle='#123d18'; g.fillRect(0,0,c.width,c.height);
 
-  /* Mow stripes. A real roller leaves the grass lying toward or away
-     from you, so each band is a gradient rather than a flat fill, and
-     alternate bands carry a faint cross-cut from the second pass. */
-  const bands=18, bw=CFG.L/bands;
-  for(let i=0;i<bands;i++){
-    const x0=px(-HALF_L+i*bw), x1=px(-HALF_L+(i+1)*bw);
-    const grd = g.createLinearGradient(x0,0,x1,0);
-    const a = i%2 ? '#235d28' : '#1f5726', b = i%2 ? '#286a2e' : '#1d5324';
+  /* Two greens, a light band and a dark band, shifted along the
+     yellow<->blue axis by PITCH.hue so a summer pitch and a wet
+     October one are recognisably different surfaces. */
+  const h = PITCH.hue;
+  const mix=(a,b,t)=>a.map((v,i)=>Math.round(v+(b[i]-v)*t));
+  const rgb=v=>'rgb('+v[0]+','+v[1]+','+v[2]+')';
+  const darkC  = mix([24,74,44],[38,80,26], h);
+  const lightC = mix([36,100,58],[54,108,36], h);
+  const dark = rgb(darkC), light = rgb(lightC);
+  const darker  = rgb(darkC.map(v=>Math.max(0,v-7)));
+  const lighter = rgb(lightC.map(v=>Math.min(255,v+9)));
+  g.fillStyle = dark; g.fillRect(0,0,c.width,c.height);
+
+  const W = c.width, Hc = c.height;
+  /* One band of cut grass. `dir` is the roller's heading; the gradient
+     across the band is the grass standing up at the edges where the
+     mower turned. */
+  const band=(x,y,w,hgt,lightSide,vertical)=>{
+    const grd = vertical ? g.createLinearGradient(x,0,x+w,0) : g.createLinearGradient(0,y,0,y+hgt);
+    const a = lightSide ? light : dark, b = lightSide ? lighter : darker;
     grd.addColorStop(0,a); grd.addColorStop(.5,b); grd.addColorStop(1,a);
-    g.fillStyle=grd; g.fillRect(x0, py(-HALF_W), (x1-x0)+1, CFG.W*ppm);
+    g.fillStyle = grd; g.fillRect(x,y,w+1,hgt+1);
+  };
+
+  switch(PITCH.cut.id){
+    case 'crosswise': {
+      const n = 13; PITCH.bands = n;
+      const bh = CFG.W/n;
+      for(let i=0;i<n;i++)
+        band(px(-HALF_L), py(-HALF_W+i*bh), CFG.L*ppm, bh*ppm, i%2===0, false);
+      break;
+    }
+    case 'check': {
+      const nx = 14, nz = 9; PITCH.bands = nx;
+      const bw = CFG.L/nx, bh = CFG.W/nz;
+      for(let i=0;i<nx;i++) for(let j=0;j<nz;j++)
+        band(px(-HALF_L+i*bw), py(-HALF_W+j*bh), bw*ppm, bh*ppm, (i+j)%2===0, true);
+      break;
+    }
+    case 'diagonal': {
+      const n = 26; PITCH.bands = n;
+      g.save();
+      g.beginPath(); g.rect(px(-HALF_L),py(-HALF_W),CFG.L*ppm,CFG.W*ppm); g.clip();
+      g.translate(px(0),py(0)); g.rotate(-Math.PI/5);
+      const span = (CFG.L+CFG.W)*ppm, bw = span/n;
+      for(let i=0;i<n;i++)
+        band(-span/2+i*bw, -span/2, bw, span, i%2===0, true);
+      g.restore();
+      break;
+    }
+    default: {                                        // lengthwise
+      const n = 18; PITCH.bands = n;
+      const bw = CFG.L/n;
+      for(let i=0;i<n;i++)
+        band(px(-HALF_L+i*bw), py(-HALF_W), bw*ppm, CFG.W*ppm, i%2===0, true);
+    }
   }
-  g.globalAlpha=.055;                                  // cross-cut, the second pass
-  for(let j=0;j<24;j++){
+  // the faint second pass every groundsman leaves behind
+  g.globalAlpha=.035;
+  for(let j=0;j<26;j++){
     g.fillStyle = j%2 ? '#ffffff' : '#000000';
-    g.fillRect(px(-HALF_L), py(-HALF_W)+j*(CFG.W*ppm/24), CFG.L*ppm, CFG.W*ppm/24);
+    g.fillRect(px(-HALF_L), py(-HALF_W)+j*(CFG.W*ppm/26), CFG.L*ppm, CFG.W*ppm/26);
   }
   g.globalAlpha=1;
 
-  // a mown-in brand stencil either side of the halfway line
-  g.save();
-  g.globalAlpha=.045; g.fillStyle='#ffffff';
-  g.textAlign='center'; g.textBaseline='middle';
-  for(const s of [-1,1]){
-    g.save();
-    g.translate(px(s*26), py(0)); g.rotate(s>0?0:Math.PI);
-    g.font='900 '+(3.4*ppm)+'px "Arial Narrow",Arial,sans-serif';
-    g.fillText(BRAND.name, 0, 0);
-    g.font='bold '+(1.5*ppm)+'px Arial,sans-serif';
-    g.fillText(BRAND.domain, 0, 2.6*ppm);
-    g.restore();
-  }
-  g.restore();
-
   // wear: goalmouths, centre circle, penalty spots
+  const wr = PITCH.wear;
   const wear=(x,z,r,a)=>{
     const gr=g.createRadialGradient(px(x),py(z),0,px(x),py(z),r*ppm);
-    gr.addColorStop(0,'rgba(126,102,56,'+a+')'); gr.addColorStop(1,'rgba(126,102,56,0)');
+    gr.addColorStop(0,'rgba(126,102,56,'+(a*wr)+')'); gr.addColorStop(1,'rgba(126,102,56,0)');
     g.fillStyle=gr; g.fillRect(px(x-r),py(z-r),r*2*ppm,r*2*ppm);
   };
   for(const s of [-1,1]){
@@ -372,7 +617,7 @@ function pitchTexture(){
     g.fillStyle = Math.random()>.5?'#ffffff':'#000000';
     g.fillRect(Math.random()*c.width, Math.random()*c.height, 2+Math.random()*9, 2);
   }
-  g.globalAlpha=.10;
+  g.globalAlpha=.10*wr;
   for(let i=0;i<340;i++){
     g.fillStyle='#6b5a30';
     const bx=Math.random()*c.width, by=Math.random()*c.height;
@@ -828,6 +1073,7 @@ function buildWorld(){
     new THREE.MeshStandardMaterial({map:pitchTexture(), normalMap:grassNormal(),
       normalScale:new THREE.Vector2(.42,.42), roughness:.94, metalness:0}));
   turf.rotation.x=-Math.PI/2; turf.receiveShadow=true; scene.add(turf);
+  TEX.turf = turf;
 
   const apron = new THREE.Mesh(new THREE.PlaneGeometry(CFG.L+90, CFG.W+90),
     new THREE.MeshStandardMaterial({color:0x0a1c0f, roughness:1}));
@@ -1615,14 +1861,6 @@ const LIGHTS = buildWorld();
 
 /* ================== entities ================== */
 const players = [];
-function attrs(role){
-  const wide = role==='LW'||role==='RW'||role==='LB'||role==='RB';
-  return {
-    pace: (wide?1.02:0.97) + Math.random()*0.06,
-    finish: (role==='ST'?0.8:role==='LW'||role==='RW'?0.65:0.42) + Math.random()*0.2,
-    pass: (role==='CM'||role==='DM'?0.78:0.55) + Math.random()*0.2
-  };
-}
 /* Every figure gets a soft contact blob. With shadows on it doubles as
    ambient occlusion at the feet; with shadows off (LITE, or a phone that
    auto-tuned down) it is the only thing keeping players on the ground
@@ -1635,13 +1873,11 @@ function addContact(body, H){
 }
 
 function makePlayer(team, i){
-  const [role,fx,fz] = FORMATION[i];
-  const isGK = role==='GK';
+  const e = TEAMS[team].squad[i];
+  const isGK = e.slot === 'GK';
   const kit = isGK ? GK_KITS[team] : TEAMS[team];
-  const ph = physique(role);
-  const name = TEAMS[team].names[i];
-  const body = buildBody(kit, i+1, {
-    height:ph.h, build:ph.build, name,
+  const body = buildBody(kit, e.num, {
+    height:e.h, build:e.build, name:e.name,
     skin:  SKIN[(Math.random()*SKIN.length)|0],
     hair:  HAIR[(Math.random()*HAIR.length)|0],
     hairStyle: (Math.random()*7)|0,
@@ -1649,18 +1885,48 @@ function makePlayer(team, i){
     gloves: isGK
   });
   scene.add(body.group);
-  addContact(body, ph.h);
-  const a = attrs(role);
-  a.pace *= 1.04 - ph.build*0.04;              // carrying more slows a man down a little
-  return { team, role, isGK, idx:i, num:i+1, name,
-    H:ph.h, build:ph.build, reach:ph.h/1.82,
-    slot:new THREE.Vector2(fx,fz), pos:new THREE.Vector2(0,0), vel:new THREE.Vector2(0,0),
+  addContact(body, e.h);
+
+  const p = { team, slot:e.slot, isGK, idx:i, num:e.num, name:e.name, pid:e.pid,
+    attrs:e.attrs, _derived:null,
+    isWide: !!SLOT_WIDE[e.slot], isFwd: !!SLOT_FWD[e.slot], isDef: !!SLOT_DEF[e.slot],
+    H:e.h, build:e.build, reach:e.h/1.82,
+    home:new THREE.Vector2(e.pos.x, e.pos.y), pos:new THREE.Vector2(0,0), vel:new THREE.Vector2(0,0),
     face:0, stamina:100, phase:Math.random()*6.283, touch:0, lunge:0, cool:0,
     think:Math.random()*.3, react:0, seen:null, kickAnim:0, celeb:0,
     dive:0, diveDir:1, diveHigh:0, footed: Math.random()<.24 ? 1 : 0,
-    attr:a, body, mesh:body.group };
+    skill:0, skillKind:0, skillDir:1, strike:null,
+    body, mesh:body.group };
+
+  /* Top speed and how fast he gets there come straight off pace and
+     acceleration; a heavier man pays for it. A 20-pace winger and a
+     6-pace centre-half are genuinely different players to watch. */
+  p.topSpeed = CFG.JOG + (CFG.SPRINT-CFG.JOG)*(0.25 + A01(p,'pace')*1.25) * (1.04 - e.build*0.04);
+  p.accel    = CFG.ACCEL * (0.72 + A01(p,'acceleration')*0.62);
+  p.turn     = 6.0 + A01(p,'agility')*6.5;
+  p.gait     = gaitOf(p);
+  return p;
 }
-for(let t=0;t<2;t++) for(let i=0;i<11;i++) players.push(makePlayer(t,i));
+function buildTeams(){
+  for(const p of players){ scene.remove(p.mesh); disposeBody(p.body); }
+  players.length = 0;
+  for(let t=0;t<2;t++){ buildSquad(t); for(let i=0;i<11;i++) players.push(makePlayer(t,i)); }
+}
+/* Geometry is shared through the G() cache, so only materials and the
+   per-player kit canvases are ours to release. */
+function disposeBody(b){
+  if(!b) return;
+  b.group.traverse(o=>{
+    if(!o.isMesh) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for(const m of mats){
+      if(!m) continue;
+      if(m.map && m.map.dispose && m.map.__own !== false) m.map.dispose();
+      m.dispose();
+    }
+  });
+}
+buildTeams();
 function teamOf(t){ return players.filter(p=>p.team===t); }
 function keeperOf(t){ return players.find(p=>p.team===t && p.isGK); }
 
@@ -1690,12 +1956,12 @@ officials[2].pos.set( 20,  (HALF_W+1.6));
 function slotWorld(p){
   const dir = S.dir[p.team], attacking = S.possTeam===p.team;
   const bx = ball.pos.x, bz = ball.pos.z;
-  let x = p.slot.x*(HALF_L*.92)*dir, z = p.slot.y*(HALF_W*.95);
+  let x = p.home.x*(HALF_L*.92)*dir, z = p.home.y*(HALF_W*.95);
   if(!p.isGK){
     x += bx*.34 + dir*(attacking?7:-4.5);
-    z += bz*(p.role==='LW'||p.role==='RW' ? .16 : .4);
-    if(p.role==='LW'||p.role==='RW')
-      z = Math.sign(p.slot.y)*Math.max(Math.abs(z), HALF_W-11);
+    z += bz*(p.isWide ? .16 : .4);
+    if(p.isWide && p.isFwd)
+      z = Math.sign(p.home.y||1)*Math.max(Math.abs(z), HALF_W-11);
     z = THREE.MathUtils.clamp(z,-HALF_W+2,HALF_W-2);
     x = THREE.MathUtils.clamp(x,-HALF_L+4,HALF_L-4);
   } else {
@@ -1706,28 +1972,34 @@ function slotWorld(p){
 }
 
 function movePlayer(p, want, sprint, dt){
-  const maxS = (sprint && p.stamina>2 ? CFG.SPRINT : CFG.JOG) * p.attr.pace;
+  /* Fresh legs run at his pace; tired ones do not. Stamina and work
+     rate set how long that lasts, so a 5-stamina player is walking by
+     the hour mark and a 18-stamina one is still pressing. */
+  const fatigue = 0.72 + 0.28*Math.min(1, p.stamina/60);
+  const maxS = (sprint && p.stamina>2 ? p.topSpeed : p.topSpeed*0.70) * fatigue;
   const desired = want.clone();
   if(desired.length()>1) desired.normalize();
   desired.multiplyScalar(maxS);
   const spd = p.vel.length();
   if(spd>2 && desired.length()>.1){
     const cosA = p.vel.dot(desired)/(spd*desired.length());
-    if(cosA<.35) p.vel.multiplyScalar(1-Math.min(.9,(.35-cosA))*CFG.TURN*dt);
+    if(cosA<.35) p.vel.multiplyScalar(1-Math.min(.9,(.35-cosA))*p.turn*dt);
   }
   const dv = desired.clone().sub(p.vel);
-  p.vel.add(dv.clampLength(0,(desired.length()>.1?CFG.ACCEL:CFG.DECEL)*dt));
+  p.vel.add(dv.clampLength(0,(desired.length()>.1?p.accel:CFG.DECEL)*dt));
   p.pos.addScaledVector(p.vel, dt);
   p.pos.x = THREE.MathUtils.clamp(p.pos.x,-HALF_L-3,HALF_L+3);
   p.pos.y = THREE.MathUtils.clamp(p.pos.y,-HALF_W-3,HALF_W+3);
-  if(sprint && desired.length()>.1) p.stamina = Math.max(0,p.stamina-13*dt);
-  else p.stamina = Math.min(100, p.stamina+(spd<1?9:4.5)*dt);
+  const burn = 17 - A01(p,'stamina')*9;
+  const rec  = 5.5 + A01(p,'stamina')*6;
+  if(sprint && desired.length()>.1) p.stamina = Math.max(0,p.stamina-burn*dt);
+  else p.stamina = Math.min(100, p.stamina+(spd<1?rec*1.9:rec)*dt);
   if(p.vel.length()>.35){
     const heading = Math.atan2(p.vel.y,p.vel.x);
     let d = heading-p.face;
     while(d>Math.PI) d-=Math.PI*2;
     while(d<-Math.PI) d+=Math.PI*2;
-    p.face += THREE.MathUtils.clamp(d,-9*dt,9*dt);
+    p.face += THREE.MathUtils.clamp(d,-p.turn*1.4*dt,p.turn*1.4*dt);
   }
   /* Cadence, not "phase proportional to speed". A footballer's stride
      RATE only climbs from about two steps a second to five; the rest of
@@ -1735,12 +2007,14 @@ function movePlayer(p, want, sprint, dt){
      amplitude in animate(). Driving phase straight off speed gave a
      jog that twinkled and a sprint that scissored. */
   const runN = Math.min(1, spd/CFG.SPRINT);
-  p.phase += (1.15 + runN*1.85) * Math.PI*2 * dt;
+  const gt = p.gait || DEFAULT_GAIT;
+  p.phase += (1.15 + runN*1.85) * gt.cadence * Math.PI*2 * dt;
   if(p.phase > Math.PI*2) p.phase -= Math.PI*2;
   p.lunge = Math.max(0,p.lunge-dt);
   p.cool = Math.max(0,p.cool-dt);
   p.kickAnim = Math.max(0,p.kickAnim-dt);
   p.dive = Math.max(0,(p.dive||0)-dt);
+  stepSkills(p, dt);
 }
 
 function separate(){
@@ -1752,6 +2026,113 @@ function separate(){
       a.pos.x-=dx/d*push; a.pos.y-=dz/d*push; b.pos.x+=dx/d*push; b.pos.y+=dz/d*push;
     }
   }
+}
+
+/* =====================================================================
+   RUNNING STYLES
+
+   Two footballers do not run the same, and a pitch full of one gait is
+   the thing that most gives away a simulation. Every player carries a
+   signature that is stable for him — seeded on his id, so he runs the
+   same way all match and in every match — and shaped by what he actually
+   is. A quick, agile winger runs tall and light on a fast cadence with
+   his arms tucked in; a heavy centre-half pounds along on a longer,
+   lower stride with his elbows out.
+   ===================================================================== */
+const DEFAULT_GAIT = {cadence:1, stride:1, armSwing:1, armOut:.10, elbow:1,
+                      lean:1, bounce:1, splay:0, sway:1, headSteady:.7};
+function gaitOf(p){
+  const r = k => seedVar(p, 'gait'+k);
+  const quick = A01(p,'acceleration'), agile = A01(p,'agility');
+  const heavy = THREE.MathUtils.clamp((p.build-0.86)/0.29, 0, 1);
+  return {
+    cadence:  0.88 + quick*0.28 + r(1)*0.14 - heavy*0.10,
+    stride:   0.90 + (1-quick)*0.18 + heavy*0.10 + r(2)*0.16,
+    armSwing: 0.68 + agile*0.46 + r(3)*0.30,
+    armOut:   0.04 + heavy*0.17 + r(4)*0.13,
+    elbow:    0.82 + r(5)*0.50 - agile*0.16,
+    lean:     0.82 + r(6)*0.42 + heavy*0.16,
+    bounce:   0.70 + agile*0.44 + r(7)*0.34,
+    splay:    (r(8)-0.5)*0.20,
+    sway:     0.72 + r(9)*0.58,
+    headSteady: 0.45 + r(10)*0.5
+  };
+}
+
+/* =====================================================================
+   SKILL MOVES
+
+   Five, chosen because they read at broadcast distance: a stepover, a
+   drag-back turn, a shoulder-drop feint, a knock past and go, and a
+   nutmeg. Whether the move comes off is a duel — his dribbling, agility
+   and balance against the defender's tackling and positioning — and the
+   outcome is decided when he commits, so the animation and the result
+   never disagree.
+   ===================================================================== */
+const SKILLS = [
+  {id:'stepover', label:'stepover',   t:0.62, gain:0.9},
+  {id:'dragback', label:'drag-back',  t:0.70, gain:0.5},
+  {id:'feint',    label:'shoulder drop', t:0.48, gain:1.0},
+  {id:'knockon',  label:'knock past', t:0.55, gain:1.3},
+  {id:'nutmeg',   label:'nutmeg',     t:0.60, gain:1.1}
+];
+function startSkill(p, opp){
+  // a tight space suits a drag-back; open grass suits a knock past
+  const space = Math.abs(p.pos.x - S.dir[p.team]*HALF_L);
+  let pool = [0,2,4];
+  if(space > 22) pool = [0,2,3];
+  if(Math.abs(p.pos.y) > HALF_W-12) pool = [0,1,2];
+  const k = pool[(Math.random()*pool.length)|0];
+  const mv = SKILLS[k];
+
+  const beat = Amix(p,   {dribbling:2.4, agility:1.2, firstTouch:0.9, composure:0.6});
+  const stop = Amix(opp, {tackling:1.6, positioning:1.4, decisions:0.8, agility:0.8});
+  const win  = THREE.MathUtils.clamp(0.34 + (beat-stop)*0.95, 0.06, 0.94);
+
+  p.skill     = mv.t;
+  p.skillMax  = mv.t;
+  p.skillKind = k;
+  p.skillDir  = (opp.pos.y > p.pos.y) ? -1 : 1;      // go the other side of him
+  p.skillWin  = Math.random() < win;
+  p.skillOpp  = opp;
+  if(p.skillWin){
+    opp.cool = Math.max(opp.cool, mv.t*0.9);          // sold — he cannot challenge
+    opp.lunge = 0;
+  }
+}
+/* Bend the carry sideways through the move, then away up the pitch. */
+function skillSteer(p, want){
+  const mv = SKILLS[p.skillKind];
+  const k = 1 - p.skill/(p.skillMax||mv.t);           // 0 -> 1 through the move
+  const dir = S.dir[p.team];
+  const out = new THREE.Vector2(want.x, want.y);
+  if(mv.id==='dragback'){
+    // check back, then take it away from the man
+    const back = Math.max(0, 1-k*2.2);
+    out.set(-dir*back + dir*(1-back), p.skillDir*0.7*(1-back));
+  } else {
+    const lateral = Math.sin(k*Math.PI) * (mv.id==='knockon' ? 0.5 : 1.0);
+    out.x += dir*0.5*k;
+    out.y += p.skillDir*lateral*1.1;
+  }
+  if(out.length()>1) out.normalize();
+  return out;
+}
+function stepSkills(p, dt){
+  if(p.skill <= 0) return;
+  p.skill -= dt;
+  if(p.skill > 0) return;
+  const mv = SKILLS[p.skillKind];
+  if(p.skillWin){
+    event('SKILL', p.name+' with a '+mv.label);
+    p.vel.multiplyScalar(1.0);
+    p.cool = 0;
+  } else {
+    p.cool = 0.45;                                    // overran it; the ball is loose
+    if(ball.owner===p){ ball.owner=null; ball.cool=0.12;
+      ball.vel.set(Math.cos(p.face)*3.2, 0, Math.sin(p.face)*3.2); }
+  }
+  p.skillOpp = null;
 }
 
 /* A smooth 0..1 hump centred on `c`, `w` wide, wrapping around the gait
@@ -1770,8 +2151,9 @@ function animate(p, dt){
   const b = p.body, spd = p.vel.length();
   const run = Math.min(1, spd/CFG.SPRINT);
   const gait = clamp((spd-0.30)/1.30, 0, 1);      // fades the stride out to a stand
+  const gt = p.gait || DEFAULT_GAIT;
   const u = (p.phase/TAU) % 1;                    // 0 = right foot strike
-  const amp = (0.18 + run*0.52) * gait;
+  const amp = (0.18 + run*0.52) * gait * gt.stride;
   const t = performance.now()/1000;
 
   b.group.position.set(p.pos.x, 0, p.pos.y);
@@ -1783,7 +2165,7 @@ function animate(p, dt){
      counter-rotates against the shoulders. That counter-rotation is the
      single strongest cue that a figure is running rather than sliding. */
   const bob = (Math.cos(2*TAU*u)*0.5 + 0.5);
-  b.root.position.y = b.hipY - b.H*(0.008 + 0.030*run)*bob*gait;
+  b.root.position.y = b.hipY - b.H*(0.008 + 0.030*run)*bob*gait*gt.bounce;
   b.root.rotation.y =  Math.sin(TAU*u)*0.13*gait;
   b.root.rotation.z =  Math.sin(TAU*u)*0.05*gait;
 
@@ -1796,7 +2178,7 @@ function animate(p, dt){
     const L = b.legs[i];
     const lu = (u + i*0.5) % 1;                   // legs half a cycle apart
     L.hip.rotation.x   = amp*(-Math.cos(TAU*lu)) - amp*0.16*Math.sin(2*TAU*lu) + run*0.10*gait;
-    L.hip.rotation.z   = 0; L.hip.rotation.y = 0;
+    L.hip.rotation.z   = 0; L.hip.rotation.y = OUT(i)*gt.splay;   // toes in or out
     L.knee.rotation.x  = amp*(0.34*bump(lu,0.26,0.30) + 1.70*bump(lu,0.72,0.27))
                        + 0.05 + run*0.10*gait;
     L.ankle.rotation.x = amp*(0.78*bump(lu,0.44,0.20) - 0.42*bump(lu,0.74,0.30));
@@ -1804,8 +2186,8 @@ function animate(p, dt){
   }
 
   /* ---- torso: leans into the run, counter-rotates against the hips ---- */
-  b.torso.rotation.x = run*0.22 + 0.03;
-  b.torso.rotation.y = -Math.sin(TAU*u)*0.20*gait;
+  b.torso.rotation.x = run*0.22*gt.lean + 0.03;
+  b.torso.rotation.y = -Math.sin(TAU*u)*0.20*gait*gt.sway;
   b.torso.rotation.z = -Math.sin(TAU*u)*0.045*gait;
 
   /* ---- arms: opposite the leg on the same side; the elbow only ever
@@ -1817,10 +2199,10 @@ function animate(p, dt){
        vertically at the mid-swing crossing and a correctly-flexed elbow
        throws the forearm straight out horizontally — which is exactly
        what "the arms are hanging off" looked like. */
-    A.sh.rotation.x = amp*0.62*Math.cos(TAU*au) + run*0.16*gait;
-    A.sh.rotation.z = OUT(i)*(0.10 + run*0.13);
+    A.sh.rotation.x = amp*0.62*gt.armSwing*Math.cos(TAU*au) + run*0.16*gait;
+    A.sh.rotation.z = OUT(i)*(0.06 + gt.armOut + run*0.11);
     A.sh.rotation.y = 0;
-    A.el.rotation.x = -(0.42 + run*0.52 + 0.34*bump(au,0.5,0.5)*gait);
+    A.el.rotation.x = -((0.42 + run*0.52 + 0.34*bump(au,0.5,0.5)*gait) * gt.elbow);
     A.el.rotation.z = 0;
   }
 
@@ -1842,34 +2224,137 @@ function animate(p, dt){
   let ha = Math.atan2(ball.pos.z-p.pos.y, ball.pos.x-p.pos.x) - p.face;
   while(ha>Math.PI) ha-=TAU;
   while(ha<-Math.PI) ha+=TAU;
-  b.headPivot.rotation.y = clamp(-ha, -1.15, 1.15);
+  b.headPivot.rotation.y = clamp(-ha, -1.15, 1.15) * (0.55 + gt.headSteady*0.45);
   b.headPivot.rotation.x = clamp((ball.pos.y - b.H*0.83)*0.16, -.28, .40) - b.torso.rotation.x*0.7;
   b.headPivot.rotation.z = -b.torso.rotation.z*0.6;
 
-  /* ---- striking the ball: plant, cock, whip through, follow ----
-     kickAnim runs 0.34 -> 0, so k walks 0 -> 1 across the strike. The
-     knee values are keyframed and every one of them is positive. */
+  /* ---- skill moves ----
+     Each is a short, readable shape: the leg circling the ball, the foot
+     dragging it back, a shoulder dropped hard one way. */
+  if(p.skill > 0){
+    const mv = SKILLS[p.skillKind];
+    const k = 1 - p.skill/(p.skillMax||mv.t);
+    const sw = Math.sin(k*Math.PI), d = p.skillDir;
+    const W = b.legs[p.footed], O = b.legs[1-p.footed];
+    switch(mv.id){
+      case 'stepover':                                     // the foot circles the ball
+        W.hip.rotation.x = -0.55*sw;
+        W.hip.rotation.z = d*0.85*Math.sin(k*TAU);
+        W.knee.rotation.x = 0.55 + 0.75*sw;
+        W.ankle.rotation.x = 0.25;
+        b.torso.rotation.z = -d*0.24*sw;
+        b.torso.rotation.y = d*0.30*sw;
+        break;
+      case 'dragback':                                     // sole on it, turn away
+        W.hip.rotation.x = lerp(-0.75, 0.55, k);
+        W.knee.rotation.x = 0.35 + 0.95*sw;
+        W.ankle.rotation.x = -0.35 + 0.6*k;
+        b.torso.rotation.x = -0.20*sw;
+        b.root.rotation.y += d*1.05*k;                     // he spins out of it
+        break;
+      case 'feint':                                        // drop the shoulder
+        b.torso.rotation.z = -d*0.46*sw;
+        b.torso.rotation.y = d*0.52*sw;
+        b.root.rotation.z  = -d*0.16*sw;
+        b.arms[0].sh.rotation.z = OUT(0)*(0.30+0.4*sw);
+        b.arms[1].sh.rotation.z = OUT(1)*(0.30+0.4*sw);
+        break;
+      case 'knockon':                                      // push it and go
+        W.hip.rotation.x = -0.85*sw;
+        W.knee.rotation.x = 0.25 + 0.35*sw;
+        W.ankle.rotation.x = 0.40*sw;
+        b.torso.rotation.x = 0.26 + 0.14*sw;
+        break;
+      default:                                             // nutmeg: a short poke
+        W.hip.rotation.x = -0.62*sw;
+        W.knee.rotation.x = 0.20 + 0.30*sw;
+        W.ankle.rotation.x = 0.30*sw;
+        O.knee.rotation.x = 0.45;
+        b.torso.rotation.y = d*0.18*sw;
+    }
+  }
+
+  /* ---- striking the ball ----
+     kickAnim runs its duration down to 0, so k walks 0 -> 1 across the
+     strike. Every knee value below is keyframed and positive. Headers
+     and volleys are whole-body actions, not leg swings, so they branch
+     away from the standard plant-and-swing entirely. */
   if(p.kickAnim > 0){
-    const k = 1 - p.kickAnim/.34;
-    const K = b.legs[p.footed], P = b.legs[1-p.footed];
-    const hipK  = k<.34 ? lerp(0.10, 0.78, k/.34) : lerp(0.78, -1.02, (k-.34)/.66);
-    const kneeK = k<.34 ? lerp(0.30, 1.62, k/.34)
-                : k<.70 ? lerp(1.62, 0.10, (k-.34)/.36)
-                        : lerp(0.10, 0.42, (k-.70)/.30);
-    K.hip.rotation.x   = hipK;
-    K.knee.rotation.x  = Math.max(0, kneeK);
-    K.ankle.rotation.x = 0.30 + 0.35*Math.sin(k*Math.PI);
-    P.hip.rotation.x   = lerp(-0.28, 0.16, k);        // plant foot beside the ball
-    P.knee.rotation.x  = 0.24 + 0.22*Math.sin(k*Math.PI);
-    P.ankle.rotation.x = 0.05;
-    b.root.position.y  = b.hipY - b.H*0.020*Math.sin(k*Math.PI);
-    b.torso.rotation.x = -0.22*Math.sin(k*Math.PI) + 0.30*Math.max(0,k-.55);
-    b.torso.rotation.y = (p.footed? -1:1)*0.34*Math.sin(k*Math.PI);
-    // the opposite arm swings across as a counterweight
-    const CA = b.arms[p.footed], SA = b.arms[1-p.footed];
-    SA.sh.rotation.x = -1.05*Math.sin(k*Math.PI); SA.sh.rotation.z = OUT(1-p.footed)*0.50;
-    CA.sh.rotation.x =  0.55*Math.sin(k*Math.PI); CA.sh.rotation.z = OUT(p.footed)*0.20;
-    SA.el.rotation.x = -0.75; CA.el.rotation.x = -0.55;
+    const dur = p.kickT || .34;
+    const k = clamp(1 - p.kickAnim/dur, 0, 1);
+    const sw = Math.sin(k*Math.PI);
+    const kind = p.kickKind || 'pass';
+
+    if(kind === 'header'){
+      // rise, arch, and snap the neck and trunk through the ball
+      const rise = Math.sin(Math.min(1,k*1.15)*Math.PI);
+      b.lean.position.y = b.H*0.26*rise;
+      b.torso.rotation.x = lerp(-0.55, 0.42, clamp((k-0.25)/0.45,0,1));
+      b.headPivot.rotation.x = lerp(-0.45, 0.34, clamp((k-0.28)/0.40,0,1));
+      for(let i=0;i<2;i++){
+        b.arms[i].sh.rotation.x = -0.95*rise - 0.25;       // arms up for leverage
+        b.arms[i].sh.rotation.z = OUT(i)*(0.55+0.35*rise);
+        b.arms[i].el.rotation.x = -0.85;
+        b.legs[i].hip.rotation.x = -0.30*rise + (i? 0.35 : -0.20);
+        b.legs[i].knee.rotation.x = 0.30 + 0.85*rise;
+        b.legs[i].ankle.rotation.x = 0.45*rise;
+      }
+    } else if(kind === 'divingheader'){
+      // full stretch, horizontal, arms trailing
+      const air = Math.sin(Math.min(1,k*1.3)*Math.PI);
+      b.lean.rotation.x = -1.05*air;
+      b.lean.position.y = b.H*0.16*air;
+      b.torso.rotation.x = -0.25;
+      b.headPivot.rotation.x = 0.20;
+      for(let i=0;i<2;i++){
+        b.arms[i].sh.rotation.x = 0.85;
+        b.arms[i].sh.rotation.z = OUT(i)*0.55;
+        b.arms[i].el.rotation.x = -0.25;
+        b.legs[i].hip.rotation.x = 0.55 + i*0.15;
+        b.legs[i].knee.rotation.x = 0.35;
+        b.legs[i].ankle.rotation.x = 0.30;
+      }
+    } else if(kind === 'volley' || kind === 'halfvolley'){
+      // stand off the plant leg and swing across the body
+      const K = b.legs[p.footed], P = b.legs[1-p.footed];
+      const high = kind === 'volley' ? 1 : 0.55;
+      K.hip.rotation.x  = lerp(0.55, -1.05*high-0.35, k);
+      K.knee.rotation.x = Math.max(0, k<.45 ? lerp(1.30,0.22,k/.45) : lerp(0.22,0.55,(k-.45)/.55));
+      K.hip.rotation.z  = OUT(p.footed)*0.55*high*sw;      // opened out to meet it
+      K.ankle.rotation.x = 0.55*sw;
+      P.hip.rotation.x  = -0.15; P.knee.rotation.x = 0.35 + 0.25*sw;
+      b.lean.position.y = b.H*0.09*sw*high;
+      b.lean.rotation.z = OUT(p.footed)*0.30*sw*high;      // leaning away to get over it
+      b.torso.rotation.x = -0.30*sw + 0.22*Math.max(0,k-.6);
+      b.torso.rotation.y = (p.footed? -1:1)*0.48*sw;
+      const SA = b.arms[1-p.footed], CA = b.arms[p.footed];
+      SA.sh.rotation.x = -1.25*sw; SA.sh.rotation.z = OUT(1-p.footed)*0.85;
+      CA.sh.rotation.x =  0.45*sw; CA.sh.rotation.z = OUT(p.footed)*0.45;
+      SA.el.rotation.x = -0.55; CA.el.rotation.x = -0.45;
+    } else {
+      // ground strike: plant, cock, whip through, follow
+      const heavy = (kind==='banger'||kind==='sweep') ? 1.15 : (kind==='tapin' ? 0.55 : 1);
+      const K = b.legs[p.footed], P = b.legs[1-p.footed];
+      const hipK  = k<.34 ? lerp(0.10, 0.78*heavy, k/.34) : lerp(0.78*heavy, -1.02*heavy, (k-.34)/.66);
+      const kneeK = k<.34 ? lerp(0.30, 1.62*heavy, k/.34)
+                  : k<.70 ? lerp(1.62*heavy, 0.10, (k-.34)/.36)
+                          : lerp(0.10, 0.42, (k-.70)/.30);
+      K.hip.rotation.x   = hipK;
+      K.knee.rotation.x  = Math.max(0, kneeK);
+      K.ankle.rotation.x = 0.30 + 0.35*sw;
+      // a curler is struck across the ball, so the leg comes round it
+      if(kind==='curler') K.hip.rotation.z = OUT(p.footed)*0.42*sw;
+      P.hip.rotation.x   = lerp(-0.28, 0.16, k);
+      P.knee.rotation.x  = 0.24 + 0.22*sw;
+      P.ankle.rotation.x = 0.05;
+      b.root.position.y  = b.hipY - b.H*0.020*sw;
+      b.torso.rotation.x = -0.22*sw*heavy + 0.30*Math.max(0,k-.55);
+      b.torso.rotation.y = (p.footed? -1:1)*0.34*sw*heavy;
+      const CA = b.arms[p.footed], SA = b.arms[1-p.footed];
+      SA.sh.rotation.x = -1.05*sw*heavy; SA.sh.rotation.z = OUT(1-p.footed)*0.50;
+      CA.sh.rotation.x =  0.55*sw;       CA.sh.rotation.z = OUT(p.footed)*0.20;
+      SA.el.rotation.x = -0.75; CA.el.rotation.x = -0.55;
+    }
   }
 
   /* ---- sliding tackle: leg extended along the ground, trailing leg
@@ -1987,18 +2472,49 @@ const ZERO = new THREE.Vector2(0,0);
 function ballTo(p){ return new THREE.Vector2(ball.pos.x-p.pos.x, ball.pos.z-p.pos.y); }
 function dist2D(p){ return ballTo(p).length(); }
 function passError(p,d){
-  const skill = THREE.MathUtils.clamp(.40 + S.aiSkill*.34 + p.attr.pass*.14, 0, .96);
-  const wobble = Math.random()<.06 ? 2.8 : 1;
-  return (1-skill)*(.09+d/40*.24)*(Math.random()*2-1)*wobble;
+  /* PASS_ERR. This is the line the manager game cares about most, so
+     the spread is deliberately wide: a 20 for passing lands it on the
+     laces almost every time, a 3 sprays it. Vision carries the long
+     ones, composure keeps him steady under pressure, and a rare wobble
+     stands in for the ball bobbling off a divot. */
+  let skill = Amix(p, {passing:2.6, vision:1.0, decisions:0.7, composure:0.5, firstTouch:0.4});
+  /* A side defending a goal the plan has already awarded starts to look
+     ragged — which is how a scripted goal arrives out of real play
+     rather than being dropped in from nowhere. */
+  if(SCRIPT.active && SCRIPT.pending && SCRIPT.pending.team !== p.team)
+    skill *= 1 - scriptUrgency(SCRIPT.pending.team)*0.68;
+  const range = 0.06 + Math.min(1, d/45)*0.30;      // long balls are harder
+  const wobble = Math.random() < (0.10 - skill*0.075) ? 2.8 : 1;
+  return (1-skill*0.94)*range*(Math.random()*2-1)*wobble;
 }
-function releaseBall(p){
-  ball.owner=null; ball.cool=.34; S.lastTouch=p; S.possTeam=p.team; p.cool=.18; p.kickAnim=.34;
+/* How long each technique takes to execute, and where on the body the
+   ball leaves from. A header leaves at the man's forehead; a volley off
+   his laces at shin height; a tap-in off the deck. */
+const STRIKE_T = {header:.42, divingheader:.55, volley:.40, halfvolley:.38,
+                  banger:.44, curler:.40, chip:.38, tapin:.24, sidefoot:.30, sweep:.34};
+function strikeHeight(p, kind){
+  if(kind==='header') return p.H*0.93;
+  if(kind==='divingheader') return p.H*0.55;
+  if(kind==='volley') return Math.max(0.35, Math.min(ball.pos.y, p.H*0.55));
+  if(kind==='halfvolley') return 0.28;
+  return 0.16;
 }
-function kick(p, dirV, speed, lift, spin){
-  ball.pos.set(p.pos.x+Math.cos(p.face)*.45, Math.max(ball.pos.y,.16), p.pos.y+Math.sin(p.face)*.45);
+function releaseBall(p, kind){
+  ball.owner=null; ball.cool=.34; S.lastTouch=p; S.possTeam=p.team;
+  p.cool=.18;
+  p.kickAnim = kind && STRIKE_T[kind] ? STRIKE_T[kind] : .34;
+  p.kickKind = kind || 'pass';
+  p.kickT    = p.kickAnim;
+  p.skill = 0;                                   // a strike cancels any trick
+}
+function kick(p, dirV, speed, lift, spin, kind){
+  const off = kind==='header'||kind==='divingheader' ? .30 : .45;
+  ball.pos.set(p.pos.x+Math.cos(p.face)*off,
+               Math.max(strikeHeight(p, kind), CFG.BALL_R),
+               p.pos.y+Math.sin(p.face)*off);
   ball.vel.set(dirV.x*speed, lift, dirV.y*speed);
   ball.spin = spin||0;
-  releaseBall(p);
+  releaseBall(p, kind);
 }
 function passOptions(p){
   return teamOf(p.team).filter(m=>m!==p && !m.isGK).map(m=>{
@@ -2016,8 +2532,10 @@ function doPass(p, aimV, power){
   if(!opts.length){ kick(p,new THREE.Vector2(Math.cos(p.face),Math.sin(p.face)),14,.5,0); return; }
   const aim = aimV.lengthSq()>.04 ? aimV.clone().normalize() : new THREE.Vector2(Math.cos(p.face),Math.sin(p.face));
   let best=null, bs=-1e9;
+  const urge = SCRIPT.active ? scriptUrgency(p.team) : 0;
   for(const o of opts){
-    const sc = o.to.clone().normalize().dot(aim)*100 - o.d*.9 - o.press*6 + o.fwd*.4;
+    let sc = o.to.clone().normalize().dot(aim)*100 - o.d*.9 - o.press*6 + o.fwd*.4;
+    if(urge > 0 && isScriptScorer(o.m)) sc += 60 + urge*320;   // find him
     if(sc>bs){ bs=sc; best=o; }
   }
   const lead = best.m.vel.clone().multiplyScalar(.35);
@@ -2054,31 +2572,149 @@ function doThrough(p, aimV, power){
   p.face = Math.atan2(to.y,to.x);
   kick(p,to,THREE.MathUtils.clamp(d*1.5+6,10,30),.8,0);
 }
-function doShot(p, aimV, power){
+/* =====================================================================
+   FINISHING
+
+   One generic shot could only ever produce one kind of goal. A finish is
+   really a choice between a handful of techniques, and which one is
+   available depends on where the ball is, how high it is, how much time
+   he has and what he is good at:
+
+     tap-in      six yards out, ball on the deck, no power needed
+     side-foot   placed, accurate, low — the bread-and-butter finish
+     sweep       a driven low finish from the edge of the area
+     curler      whipped round the keeper with the outside of the box
+     banger      a full-blooded drive from distance
+     chip        lifted over an advancing keeper
+     volley      struck out of the air below the waist
+     halfvolley  taken on the bounce
+     header      met in the air; needs height and heading, not shooting
+     divingheader a low ball met with the forehead at full stretch
+
+   Each has its own accuracy model, its own ball flight, and its own
+   strike animation, and the type is carried through to the goal graphic
+   so the replay caption says what it actually was.
+   ===================================================================== */
+const FINISH = {
+  tapin:       {label:'TAP-IN',        speed:[10,4],  lift:[0.15,0.3], curl:0.0, spread:0.30, attr:{composure:2,firstTouch:1}},
+  sidefoot:    {label:'SIDE-FOOT',     speed:[16,7],  lift:[0.4,0.7],  curl:0.6, spread:0.62, attr:{shooting:1.6,composure:1.4,firstTouch:0.8}},
+  sweep:       {label:'LOW DRIVE',     speed:[23,9],  lift:[0.3,0.5],  curl:0.4, spread:0.90, attr:{shooting:2,strength:0.6,composure:0.8}},
+  curler:      {label:'CURLER',        speed:[20,8],  lift:[1.1,1.0],  curl:4.4, spread:0.88, attr:{shooting:1.6,technique:0,firstTouch:1.2,vision:0.6}},
+  banger:      {label:'SCREAMER',      speed:[29,12], lift:[1.2,1.4],  curl:1.2, spread:1.55, attr:{shooting:2.2,strength:1.4,composure:0.5}},
+  chip:        {label:'CHIP',          speed:[13,4],  lift:[3.4,1.4],  curl:0.3, spread:1.05, attr:{composure:2,vision:1.4,firstTouch:1.2}},
+  volley:      {label:'VOLLEY',        speed:[26,10], lift:[0.9,1.1],  curl:0.9, spread:1.60, attr:{shooting:1.8,firstTouch:1.6,agility:1.0}},
+  halfvolley:  {label:'HALF-VOLLEY',   speed:[25,10], lift:[0.8,1.0],  curl:0.7, spread:1.35, attr:{shooting:1.8,firstTouch:1.4}},
+  header:      {label:'HEADER',        speed:[15,7],  lift:[0.5,0.9],  curl:0.2, spread:1.15, attr:{heading:2.6,strength:1.0,positioning:0.8}},
+  divingheader:{label:'DIVING HEADER', speed:[14,5],  lift:[0.2,0.4],  curl:0.1, spread:1.30, attr:{heading:2.4,composure:1.0,agility:1.0}}
+};
+
+/* Which techniques are even on the table right now. Returned best-first;
+   the caller weights them by the player's ability at each. */
+function finishOptions(p, d, ballY, pressure){
+  const out = [];
+  const airborne = ballY > 0.55, high = ballY > 1.35, rising = ball.vel.y > 0.4;
+  const tall = p.H > 1.84;
+  if(high && d < 18){
+    out.push('header');
+    if(ballY < 2.0 && d < 11 && pressure < 1.2) out.push('divingheader');
+  } else if(airborne && d < 26){
+    out.push(rising || ballY > 0.95 ? 'volley' : 'halfvolley');
+  } else {
+    if(d < 6.5) out.push('tapin');
+    if(d < 17) out.push('sidefoot');
+    if(d < 22) out.push('sweep');
+    if(d > 9 && d < 26 && Math.abs(p.pos.y) > 5) out.push('curler');
+    if(d > 19) out.push('banger');
+    const gk = keeperOf(1-p.team);
+    const gkOut = gk ? Math.hypot(gk.pos.x - S.dir[p.team]*HALF_L, gk.pos.y) : 0;
+    if(gkOut > 4.5 && d > 8 && d < 30) out.push('chip');
+  }
+  if(!out.length) out.push(tall && high ? 'header' : 'sidefoot');
+  return out;
+}
+function pickFinish(p, d, pressure){
+  const opts = finishOptions(p, d, ball.pos.y, pressure);
+  let best = opts[0], bs = -1e9;
+  for(const k of opts){
+    const f = FINISH[k];
+    // how good he is at it, minus how hard it is, plus a little appetite
+    let sc = Amix(p, f.attr)*100 - f.spread*22 + Math.random()*26;
+    if(k==='banger') sc += (A01(p,'shooting')-0.55)*70;      // only real strikers try these
+    if(k==='chip')   sc += (A01(p,'composure')-0.6)*60;
+    if(k==='divingheader') sc += (A01(p,'aggression')-0.5)*40;
+    if(sc>bs){ bs=sc; best=k; }
+  }
+  return best;
+}
+
+function doShot(p, aimV, power, forced){
   const gx = S.dir[p.team]*HALF_L;
-  const acc = .55 + p.attr.finish*.45;
-  const spread = (1-power)*.7 + (1-acc)*1.1 + (1-Math.min(1,p.stamina/40))*.6;
-  // aim can miss the frame entirely — that is where wide shots and goal kicks come from
-  const aimZ = THREE.MathUtils.clamp((aimV.lengthSq()>.04?aimV.y*3.2:0)
-    + (Math.random()-.5)*spread*5.5, -7.5, 7.5);
+  const flat = new THREE.Vector2(gx - p.pos.x, -p.pos.y);
+  const d = flat.length();
+  let pressure = 0;
+  for(const o of teamOf(1-p.team))
+    if(!o.isGK) pressure += Math.max(0, 1 - Math.hypot(o.pos.x-p.pos.x,o.pos.y-p.pos.y)/4);
+
+  /* If the plan owes this side a goal and this is the man it names,
+     the technique it names is the one he uses. */
+  const urge = SCRIPT.active ? scriptUrgency(p.team) : 0;
+  const mine = isScriptScorer(p);
+  let kind = forced || pickFinish(p, d, pressure);
+  if(mine && urge > 0 && SCRIPT.pending && SCRIPT.pending.finish && FINISH[SCRIPT.pending.finish])
+    kind = SCRIPT.pending.finish;
+  const f = FINISH[kind];
+
+  /* Accuracy. Ability closes the spread, distance and pressure open it,
+     and tired legs open it further. A 19-shooting striker eight yards
+     out hits the target nearly every time; a 6-shooting full-back
+     hammering one from thirty rarely does. */
+  const skill = Amix(p, f.attr);
+  const tired = 1 - Math.min(1, p.stamina/45);
+  const spread = f.spread * (1.70 - skill*1.05)
+               * (1 + Math.max(0, d-14)/34)
+               * (1 + pressure*0.30)
+               * (1 + tired*0.45)
+               * (1 - A01(p,'composure')*0.22);
+
+  let aimZ = THREE.MathUtils.clamp(
+    (aimV && aimV.lengthSq()>.04 ? aimV.y*3.0 : 0)
+      + (Math.random()-.5)*4.4                          // he picks a corner
+      + (Math.random()-.5)*spread*6.2,                  // and this is whether he hits it
+    -8.6, 8.6);
+  /* The plan's goal is not left to chance: as it falls due the aim is
+     pulled inside the posts. It still arrives as a struck shot from open
+     play — it simply does not miss. */
+  const put = mine ? urge : urge*0.55;
+  if(put > 0) aimZ = THREE.MathUtils.clamp(aimZ*(1-put*0.95), -3.1, 3.1);
   const to = new THREE.Vector2(gx, aimZ).sub(p.pos);
-  const d = to.length();
   const facing = new THREE.Vector2(Math.cos(p.face), Math.sin(p.face));
   const align = facing.dot(to.clone().normalize());
-  to.rotateAround(ZERO, (Math.random()-.5)*(1-Math.max(0,align))*.5);
+  // striking across your body is harder than striking through the ball
+  to.rotateAround(ZERO, (Math.random()-.5)*(1-Math.max(0,align))*0.55*(1.3-skill*0.6));
+
+  const pw = power==null ? 0.75 : power;
+  const speed = (f.speed[0] + f.speed[1]*pw) * (0.80 + A01(p,'strength')*0.22)
+              * (0.92 + align*0.08) * (0.94 + Math.random()*0.12);
+  const lift  = f.lift[0] + f.lift[1]*Math.random() + Math.max(0,d-20)*0.035;
+  const curl  = f.curl * (Math.random()*2-1) * (0.5 + A01(p,'firstTouch')*0.9);
+
   S.stats.shots[p.team]++;
-  S.liveShot = {team:p.team, player:p, t:3.2};
+  S.liveShot = {team:p.team, player:p, t:3.2, kind, d};
+  emit('shot', {team:p.team, player:p.name, pid:p.pid, finish:kind,
+                distance:Math.round(d), minute:clockLabel()});
   S.pendingOffside = null;
   p.face = Math.atan2(to.y,to.x);
-  kick(p, to.normalize(), (17+power*15)*(.9+align*.1),
-       THREE.MathUtils.clamp(d*.07+(1-power)*.6,.6,4.2),
-       (aimV.lengthSq()>.04?aimV.y:0)*-5.5);
+  p.strike = {kind, t:0};                                 // drives the animation
+  kick(p, to.normalize(), speed, lift, curl, kind);
 }
 function clearance(p, panic){
-  const spread = panic ? 1.9 : .9;
+  // a keeper with distribution picks a man; a panicking defender does not
+  const acc = p.isGK ? A01(p,'distribution') : A01(p,'passing')*0.6;
+  const spread = (panic ? 2.1 : 1.1) * (1.15 - acc*0.85);
   const dir = new THREE.Vector2(S.dir[p.team], (Math.random()-.5)*spread).normalize();
   p.face = Math.atan2(dir.y,dir.x);
-  kick(p, dir, panic ? 22+Math.random()*10 : 26, panic ? 6.5 : 5.2, 0);
+  kick(p, dir, (panic ? 22+Math.random()*10 : 26) * (0.85 + A01(p,'strength')*0.25),
+       panic ? 6.5 : 5.2, 0);
 }
 function doCross(p){
   const dir = S.dir[p.team];
@@ -2086,9 +2722,11 @@ function doCross(p){
   const target = new THREE.Vector2(dir*(HALF_L-7.5), far*(2+Math.random()*6));
   const to = target.sub(p.pos);
   const d = to.length();
-  to.normalize().rotateAround(ZERO, (Math.random()-.5)*.26);
+  const cAcc = Amix(p, {crossing:2.4, vision:0.8, technique:0});
+  to.normalize().rotateAround(ZERO, (Math.random()-.5)*(0.52 - cAcc*0.40));
   p.face = Math.atan2(to.y,to.x);
-  kick(p, to, THREE.MathUtils.clamp(d*1.15+4, 12, 26), 4.6+Math.random()*1.6, 0);
+  kick(p, to, THREE.MathUtils.clamp(d*1.15+4, 12, 26), 4.6+Math.random()*1.6,
+       (Math.random()-.5)*2.4*cAcc);
   event('CROSS', p.name+' swings it in');
 }
 
@@ -2101,11 +2739,15 @@ function resolvePossession(){
     if(p.cool>0) continue;
     const d = dist2D(p);
     // a taller man covers more ground with the same step, and gets higher
-    const reach = (CFG.CTRL_R + (p.lunge>0?1.1:0) + (p.isGK?1.25:0)) * p.reach;
+    let reach = (CFG.CTRL_R + (p.lunge>0?1.1:0) + (p.isGK?1.25:0)) * p.reach;
+    if(p.isGK && S.liveShot && S.liveShot.team!==p.team)
+      reach *= 1.35 + A01(p,'agility')*0.55;      // full stretch at a shot
     if(d>reach || ball.pos.y > (p.isGK?2.55:1.5)*p.reach) continue;
     let score = d;
     if(p===owner) score -= .65;
     else if(owner && p.team===owner.team) score += .5;
+    if(SCRIPT.active && SCRIPT.stats && SCRIPT.stats.possession)
+      score -= (possBias(p.team)-1)*9.0;             // 50-50s go the plan's way
     if(score<bestD){ bestD=score; best=p; }
   }
   if(!best || best===owner) return;
@@ -2116,12 +2758,31 @@ function resolvePossession(){
     return;
   }
   if(S.pendingOffside && best.team!==S.pendingOffside.team) S.pendingOffside=null;
+  /* A challenge is a duel: his tackling and strength against the
+     carrier's dribbling, balance and composure. Lose it badly enough and
+     it is a foul — and a wild, aggressive tackler concedes more of them. */
   if(owner && owner.team!==best.team && best.lunge>0){
     const d = Math.hypot(owner.pos.x-best.pos.x, owner.pos.y-best.pos.y);
-    if(d<.95 && Math.random()<.4){
-      event('FOUL', best.name+' catches '+owner.name);
-      setRestart('free', owner.team, new THREE.Vector2(owner.pos.x,owner.pos.y), 'FREE KICK');
-      return;
+    if(d < 1.15){
+      const win  = Amix(best,  {tackling:2.4, positioning:0.8, strength:0.8, agility:0.6});
+      const keep = Amix(owner, {dribbling:2.0, agility:1.0, composure:0.9, strength:0.8});
+      const edge = win - keep;                       // -1 .. +1
+      const foul = THREE.MathUtils.clamp(0.34 - edge*0.42 + A01(best,'aggression')*0.20, 0.04, 0.72);
+      if(Math.random() < foul){
+        const line = S.dir[best.team]*-HALF_L;
+        const inBox = Math.abs(owner.pos.x-line) < CFG.PEN_D
+                   && Math.abs(owner.pos.y) < CFG.PEN_W/2;
+        if(inBox && scriptAllowsGoal(owner.team)){
+          awardPenalty(owner.team, null, best.name+' brings down '+owner.name);
+        } else {
+          event('FOUL', best.name+' catches '+owner.name);
+          setRestart('free', owner.team, new THREE.Vector2(owner.pos.x,owner.pos.y), 'FREE KICK');
+        }
+        return;
+      }
+      if(Math.random() > 0.5 + edge*0.45){           // beaten: the carrier goes past
+        best.cool = 0.55; return;
+      }
     }
   }
   // blocks, saves and deflections on a shot in flight
@@ -2137,15 +2798,40 @@ function resolvePossession(){
       best.diveHigh = ball.pos.y > 1.15 ? 1 : 0;
       cutTo('save', 1.6);
     }
-    if(inBox && Math.random() < (best.isGK ? .5 : .45)){
-      const away = -S.dir[best.team];              // put it behind for a corner
+    /* Whether he keeps it out. A keeper's shot-stopping is reflexes and
+       handling against how hard and how well the shot was struck; an
+       outfielder blocking is bravery and positioning. Good handling
+       gathers it, poor handling parries it back into danger. */
+    let stop;
+    if(best.isGK){
+      const shooter = S.liveShot ? S.liveShot.player : null;
+      const power = Math.min(1, ball.vel.length()/32);
+      const quality = shooter ? Amix(shooter,{shooting:1.6,composure:1.0}) : 0.5;
+      stop = THREE.MathUtils.clamp(
+        0.20 + Amix(best,{reflexes:2.0, handling:1.2, positioning:0.9, agility:0.7})*0.62
+             - power*0.22 - quality*0.16, 0.08, 0.88);
+      // a goal is due to the other side: he is not getting to this one
+      if(SCRIPT.active && SCRIPT.pending && SCRIPT.pending.team !== best.team)
+        stop *= 1 - scriptUrgency(SCRIPT.pending.team)*0.92;
+    } else {
+      stop = 0.22 + Amix(best,{positioning:1.4, aggression:1.0, tackling:0.6})*0.42;
+    }
+    if(inBox && Math.random() < stop){
+      const clean = best.isGK && Math.random() < A01(best,'handling')*0.75;
+      if(clean){                                    // gathered, match stops
+        ball.owner = best; ball.vel.set(0,0,0);
+        S.possTeam = best.team; S.lastTouch = best; best.gkHold = 1.1;
+        event('SAVE', best.name+' holds it');
+        return;
+      }
+      const away = -S.dir[best.team];              // parried behind, or blocked clear
       ball.vel.set(away*9, 2.6, (Math.random()-.5)*12);
       ball.cool = .45; best.cool = .5; S.lastTouch = best;
       event(best.isGK?'SAVE':'BLOCK',
             best.name + (best.isGK?' pushes it behind':' throws himself in front'));
       return;
     }
-    if(best.isGK) event('SAVE', best.name+' gathers it');
+    if(best.isGK && Math.random() < 0.35) event('SAVE', best.name+' gathers it');
   }
   // a tackle near the touchline can knock the ball out
   if(owner && owner.team!==best.team && best.lunge>0 &&
@@ -2163,9 +2849,11 @@ function resolvePossession(){
 /* ================== AI ================== */
 function nearestToBall(team){
   let best=null, bd=1e9;
+  const urge = SCRIPT.active ? scriptUrgency(team) : 0;
   for(const p of teamOf(team)){
     if(p.isGK) continue;
-    const d = dist2D(p);
+    let d = dist2D(p);
+    if(urge>0 && isScriptScorer(p)) d -= urge*9;   // he gambles on it
     if(d<bd){ bd=d; best=p; }
   }
   return best;
@@ -2186,7 +2874,29 @@ function aiPlayer(p, dt){
     const dBall = Math.hypot(ball.pos.x-line, ball.pos.z);
     const loose = !ball.owner;
     const threat = ball.owner && ball.owner.team!==p.team;
-    if(inBox && ((loose && dBall<6.5) || (threat && dBall<3.4))){
+    /* A shot is on its way. Work out where it will cross his line and
+       get across — but only as far as his reflexes and agility let him,
+       which is what separates a keeper who reaches the top corner from
+       one who watches it go in. Before this the keeper held a central
+       position and anything placed wide was an automatic goal. */
+    if(S.liveShot && S.liveShot.team!==p.team && Math.abs(ball.vel.x)>4){
+      const t = (line - ball.pos.x)/ball.vel.x;
+      if(t>0 && t<1.8){
+        const zc = ball.pos.z + ball.vel.z*t;
+        const yc = ball.pos.y + ball.vel.y*t - 4.905*t*t;
+        if(Math.abs(zc) < CFG.GOAL_W/2+2.0 && yc < CFG.GOAL_H+0.8){
+          const cover = (0.30 + Amix(p,{reflexes:2.0, agility:1.2, positioning:1.0})*0.92)
+                      * (1 - scriptUrgency(1-p.team)*0.90);
+          const aim = THREE.MathUtils.clamp(p.pos.y + (zc-p.pos.y)*cover,
+                                            -CFG.GOAL_W/2-1.2, CFG.GOAL_W/2+1.2);
+          want.set(line-p.pos.x, aim-p.pos.y);
+          movePlayer(p, want.clampLength(0,1), true, dt);
+          animate(p,dt); return;
+        }
+      }
+    }
+    const brave = 4.5 + A01(p,'oneOnOnes')*3.5;
+    if(inBox && ((loose && dBall<brave) || (threat && dBall<2.4+A01(p,'oneOnOnes')*1.8))){
       want.set(ball.pos.x-p.pos.x, ball.pos.z-p.pos.y); sprint=true;
     } else {
       const z = THREE.MathUtils.clamp(ball.pos.z*.34, -3.4, 3.4);
@@ -2200,40 +2910,69 @@ function aiPlayer(p, dt){
   p.think -= dt;
   p.react = (p.react||0) - dt;
   if(p.react<=0 || !p.seen){
-    p.react = .10 + (1-S.aiSkill)*.32;
+    // sharp decision-makers see it developing; slow ones react late
+    p.react = .22 - A01(p,'decisions')*0.13;
     p.seen = new THREE.Vector2(ball.pos.x+ball.vel.x*.22, ball.pos.z+ball.vel.z*.22);
   }
 
   if(ball.owner===p){
+    const ment = MENT_MOD[TEAMS[p.team].mentality] || MENT_MOD.Balanced;
     if(p.think<=0){
-      p.think = .18+Math.random()*.14;
-      let press=0, nearest=1e9;
+      // he weighs it up as quickly as his decisions let him
+      p.think = .26 - A01(p,'decisions')*0.11 + Math.random()*.10;
+      let press=0, nearest=1e9, nearestMan=null;
       for(const o of teamOf(1-p.team)){
         const d = Math.hypot(o.pos.x-p.pos.x,o.pos.y-p.pos.y);
         if(d<3.4) press++;
-        nearest = Math.min(nearest,d);
+        if(d<nearest){ nearest=d; nearestMan=o; }
       }
       const wide = Math.abs(p.pos.y) > HALF_W-15;
       const finalThird = p.pos.x*dir > HALF_L-32;
       const ownThird = p.pos.x*dir < -(HALF_L-35);
-      if(wide && finalThird && Math.abs(p.pos.x*dir) > 12 &&
-         (p.role==='LW'||p.role==='RW'||p.role==='LB'||p.role==='RB') &&
-         Math.random() < .5){
+      const goalD = Math.hypot(dir*HALF_L-p.pos.x, p.pos.y);
+
+      /* A skill move: only if he is good enough to try one, has a man to
+         beat, and has the space in front to go into. */
+      if(nearestMan && nearest<3.2 && nearest>1.1 && p.skill<=0 && p.cool<=0 &&
+         goalD>9 && Math.random() < 0.026 + A01(p,'dribbling')*0.085){
+        startSkill(p, nearestMan); animate(p,dt); return;
+      }
+      // a good crosser in a wide area puts it in the mixer
+      if(wide && finalThird && Math.abs(p.pos.x*dir) > 12 && p.isWide &&
+         Math.random() < 0.24 + A01(p,'crossing')*0.46){
         doCross(p); animate(p,dt); return;
       }
-      if(ownThird && press>0 && (p.role==='CB'||p.role==='LB'||p.role==='RB') &&
-         Math.random() < .45){
+      // a defender under pressure with no passing ability just hoofs it
+      if(ownThird && press>0 && p.isDef &&
+         Math.random() < 0.62 - A01(p,'composure')*0.34 - A01(p,'passing')*0.16){
         clearance(p, true); animate(p,dt); return;
       }
-      const goalD = Math.hypot(dir*HALF_L-p.pos.x, p.pos.y);
-      if(goalD<27 && nearest>(goalD<16?1.1:1.5) &&
-         Math.random() < (goalD<15?.75:.42)*S.aiSkill*(.6+p.attr.finish*.6)){
-        doShot(p, new THREE.Vector2(0,(Math.random()-.5)*.6), .55+Math.random()*.4);
-        animate(p,dt); return;
+      /* Shooting. Appetite comes off shooting and composure and the
+         team's mentality; the range he will try from comes off his
+         shooting too, so a 5-shooting full-back does not try one from
+         thirty yards. */
+      const urge = scriptUrgency(p.team), mine = isScriptScorer(p);
+      const range = (15 + A01(p,'shooting')*20) * (1 + urge*(mine?0.7:0.25));
+      if(goalD < range && nearest > (goalD<16 ? 1.0 : 1.5)*(1-urge*0.6)){
+        const appetite = (goalD<15 ? .40 : .17)
+          * (0.55 + A01(p,'shooting')*0.75) * (0.8 + A01(p,'composure')*0.4) * ment.shoot
+          * (urge>0 ? Math.max(0.85, shotBias(p.team)) : shotBias(p.team))
+          * (1 + urge*(mine ? 4.5 : 0.6));
+        if(Math.random() < appetite){
+          doShot(p, new THREE.Vector2(0,(Math.random()-.5)*.6), .55+Math.random()*.4);
+          animate(p,dt); return;
+        }
       }
-      if(nearest>4.2 && goalD>12){ /* space ahead: carry */ }
-      else if(press>0 && Math.random() < .4+S.aiSkill*.26){
-        if(Math.random()<.3) doThrough(p,new THREE.Vector2(dir,0),.6);
+      /* Whether to release it. A good passer under pressure finds a man;
+         a poor one holds it too long and gets closed down — which is the
+         behaviour the manager game asked for. */
+      const releases = (0.30 + A01(p,'passing')*0.34 + A01(p,'vision')*0.16
+                     + A01(p,'decisions')*0.14) * possBias(p.team);
+      if(nearest>4.2 && goalD>12 && Math.random() > A01(p,'vision')*0.35){
+        /* space ahead: carry it */
+      } else if(press>0 && Math.random() < releases){
+        const through = 0.14 + A01(p,'vision')*0.36;
+        if(Math.random() < through*ment.direct*0.7) doThrough(p,new THREE.Vector2(dir,0),.6);
         else doPass(p,ZERO,.5);
         animate(p,dt); return;
       }
@@ -2247,34 +2986,197 @@ function aiPlayer(p, dt){
     }
     if(close && cd<4)
       want.addScaledVector(new THREE.Vector2(p.pos.x-close.pos.x,p.pos.y-close.pos.y).normalize(),.9).normalize();
+    if(p.skill>0) want = skillSteer(p, want);
     movePlayer(p, want, cd>2.2, dt); animate(p,dt); return;
   }
 
   if(!ball.owner && p===nearestToBall(p.team)){
     want.set(p.seen.x-p.pos.x, p.seen.y-p.pos.y);
-    if(dist2D(p)<2.4 && p.lunge<=0 && p.team!==S.possTeam && Math.random()<.04*S.aiSkill) p.lunge=.35;
+    if(dist2D(p)<2.4 && p.lunge<=0 && p.team!==S.possTeam &&
+       Math.random() < 0.015 + A01(p,'aggression')*0.055) p.lunge=.35;
     movePlayer(p, want.clampLength(0,1), true, dt); animate(p,dt); return;
   }
 
   if(p.team===S.possTeam){
     const t = slotWorld(p);
-    if((p.role==='ST'||p.role==='LW'||p.role==='RW') && ball.pos.x*dir>0)
-      t.x = THREE.MathUtils.clamp(t.x+dir*6,-HALF_L+3,HALF_L-3);
+    // good movement off the ball buys a forward a few extra yards
+    if(p.isFwd && ball.pos.x*dir>0)
+      t.x = THREE.MathUtils.clamp(t.x+dir*(3+A01(p,'offTheBall')*7),-HALF_L+3,HALF_L-3);
+    // and the man the plan says scores gets into the box for it
+    if(isScriptScorer(p)){
+      const u = 0.4 + scriptUrgency(p.team)*0.6;
+      t.x = THREE.MathUtils.clamp(t.x + dir*14*u, -HALF_L+3, HALF_L-3);
+      t.y *= (1-u*0.55);
+    }
     want.set(t.x-p.pos.x,t.y-p.pos.y);
     sprint = want.length()>12;
   } else {
     const chaser = nearestToBall(p.team);
     if(p===chaser){
       want.set(p.seen.x-p.pos.x,p.seen.y-p.pos.y); sprint=true;
-      if(dist2D(p)<2.2 && p.lunge<=0 && Math.random()<.05*S.aiSkill) p.lunge=.35;
+      if(dist2D(p)<2.2 && p.lunge<=0 &&
+         Math.random() < (0.018 + Amix(p,{tackling:1,aggression:1})*0.075)
+                       * (1 + scriptUrgency(p.team)*1.8)) p.lunge=.35;
     } else {
       const t = slotWorld(p);
-      want.set(t.x*.55+ball.pos.x*.45-dir*3-p.pos.x, t.y*.6+ball.pos.z*.4-p.pos.y);
-      sprint = want.length()>10;
+      const ment = MENT_MOD[TEAMS[p.team].mentality] || MENT_MOD.Balanced;
+      const push = dir*(3 - ment.line*22);            // an attacking side defends higher
+      want.set(t.x*.55+ball.pos.x*.45-push-p.pos.x, t.y*.6+ball.pos.z*.4-p.pos.y);
+      sprint = want.length() > 12 - A01(p,'workRate')*5;
     }
   }
   movePlayer(p, want.clampLength(0,1), sprint, dt);
   animate(p,dt);
+}
+
+/* =====================================================================
+   DIRECTED MATCHES — the manager game owns the result
+
+   The Results Business already knows what a match should look like. It
+   has a calibrated model (target goals a game, xG per shot, on-target
+   rates, regression bands for draw and goalless rates) and guardrails
+   that make a 7-0 possible but rare. Left to itself this view has no
+   such knowledge: run two mismatched sides and it will hand you 7-0
+   every week, because nothing here is holding it to a distribution.
+
+   So it does not get to decide. The manager passes a PLAN — when the
+   goals go in, who scores them, and roughly how many shots and how much
+   of the ball each side should have — and this engine performs it:
+
+     * a goal only counts if the plan says one is due; anything else
+       that crosses the line is turned into a save or the woodwork,
+       which is why the guarantee is enforced at the goal line itself
+       and not merely nudged in the shooting code
+     * when a goal falls due the named scorer is pushed forward, his
+       appetite goes up and the keeper's hands go down, so the goal
+       arrives out of real build-up play rather than being teleported in
+     * shot volume and possession are steered toward the plan's numbers
+       across the half rather than clamped, so the flow still looks like
+       football
+
+   The result is a match you can watch that agrees, to the goal and the
+   scorer, with the one your save file recorded.
+   ===================================================================== */
+const SCRIPT = {
+  active:false, events:[], stats:null, pending:null, blocked:0, forced:0
+};
+function clearScript(){
+  SCRIPT.active=false; SCRIPT.events=[]; SCRIPT.stats=null;
+  SCRIPT.pending=null; SCRIPT.blocked=0; SCRIPT.forced=0; SCRIPT.penWait=0;
+}
+/* Minutes elapsed on the 90-minute clock the HUD shows. */
+function scriptMinute(){
+  const total = S.halfLen*2 || 1;
+  return ((S.half-1)*S.halfLen + S.clock)/total*90;
+}
+function loadScript(plan){
+  clearScript();
+  if(!plan) return;
+  const evs = (plan.events||plan.goals||[])
+    .filter(e => e && (e.type==null || e.type==='goal'))
+    .map((e,i) => ({
+      minute: Math.max(0, Math.min(95, +e.minute || +e.min || 0)),
+      team:   (e.team===1 || e.team==='away') ? 1 : 0,
+      scorer: e.scorer || e.player || null,
+      pid:    e.pid != null ? String(e.pid) : (e.playerId != null ? String(e.playerId) : null),
+      finish: e.finish || e.kind || null,
+      own:    !!e.ownGoal,
+      seq:i, fired:false
+    }))
+    .sort((a,b)=>a.minute-b.minute);
+  SCRIPT.events = evs;
+  SCRIPT.stats  = plan.stats || null;
+  SCRIPT.active = true;
+}
+/* The next goal this side is owed, if any. */
+function nextGoal(team){
+  for(const e of SCRIPT.events) if(!e.fired && e.team===team) return e;
+  return null;
+}
+/* Is a goal for `team` allowed to stand right now? A little early is
+   fine — football does not keep to the minute — but not a whole goal
+   out of sequence. */
+function scriptAllowsGoal(team){
+  if(!SCRIPT.active) return true;
+  const e = nextGoal(team);
+  if(!e) return false;
+  // any goal still owed before the final whistle may land from 90s early
+  return scriptMinute() >= e.minute - 1.5;
+}
+function markGoalScored(team){
+  if(!SCRIPT.active) return null;
+  const e = nextGoal(team);
+  if(e){ e.fired = true; if(SCRIPT.pending===e) SCRIPT.pending=null; }
+  SCRIPT.penWait = 0; SCRIPT.penAt = 0;
+  return e;
+}
+/* Each tick: work out whether a goal is due, and if it is overdue push
+   the side that is owed it. */
+function scriptTick(){
+  if(!SCRIPT.active){ SCRIPT.pending=null; return; }
+  const now = scriptMinute();
+  let due = null;
+  for(const e of SCRIPT.events){
+    if(e.fired) continue;
+    if(now >= e.minute - 0.75){ due = e; break; }
+  }
+  SCRIPT.pending = due;
+
+  /* Open play will not always oblige. Once a goal is badly overdue the
+     owed side gets a spot kick — a legitimate way to score that looks
+     like football, rather than a goal appearing out of nowhere. The
+     alternative is a scoreline that disagrees with the save file, which
+     is the one outcome this mode exists to prevent. */
+  if(!due || S.phase!=='play') return;
+  const late = now - due.minute;
+  const wait = SCRIPT.penWait || 0;
+  SCRIPT.penWait = wait + (1/60);
+  if(!SCRIPT.penAt) SCRIPT.penAt = 5 + Math.random()*5;   // jittered, so the fallback
+  const limit = S.stoppage > 0 ? 1.5 : SCRIPT.penAt;      // never lands on the same minute
+  if(late > limit && SCRIPT.penWait > 6){
+    SCRIPT.penWait = 0; SCRIPT.penAt = 0; SCRIPT.forced++;
+    const named = due.pid || due.scorer
+      ? teamOf(due.team).find(q => (due.pid && String(q.pid)===due.pid) ||
+          (due.scorer && q.name.toUpperCase()===String(due.scorer).toUpperCase()))
+      : null;
+    awardPenalty(due.team, named, 'a spot kick for '+TEAMS[due.team].name);
+  }
+}
+/* How hard to push the side that is owed a goal: 0 at the moment it
+   falls due, rising the longer it goes unpaid. */
+function scriptUrgency(team){
+  if(!SCRIPT.active || !SCRIPT.pending || SCRIPT.pending.team!==team) return 0;
+  if(S.stoppage > 0) return 1;                       // added time: get it done
+  return THREE.MathUtils.clamp((scriptMinute() - SCRIPT.pending.minute + 1.5)/3, 0, 1);
+}
+/* Is this the man the plan says scores it? */
+function isScriptScorer(p){
+  const e = SCRIPT.pending;
+  if(!e || e.team!==p.team) return false;
+  if(e.pid)    return String(p.pid) === e.pid;
+  if(e.scorer) return p.name.toUpperCase() === String(e.scorer).toUpperCase();
+  return false;
+}
+/* Shot volume steering. Returns a multiplier that pulls the running
+   shot count toward the plan's total as the match goes on. */
+function shotBias(team){
+  if(!SCRIPT.active || !SCRIPT.stats || !SCRIPT.stats.shots) return 1;
+  const target = SCRIPT.stats.shots[team];
+  if(!target) return 1;
+  const frac = THREE.MathUtils.clamp(scriptMinute()/90, 0.05, 1);
+  const expected = target*frac;
+  const have = S.stats.shots[team];
+  return THREE.MathUtils.clamp(1 + (expected-have)*0.22, 0.25, 2.6);
+}
+/* Possession steering, same idea, applied to how readily a side gives
+   the ball away. */
+function possBias(team){
+  if(!SCRIPT.active || !SCRIPT.stats || !SCRIPT.stats.possession) return 1;
+  const t = SCRIPT.stats.possession[team];
+  if(!t) return 1;
+  const tot = S.stats.poss[0]+S.stats.poss[1] || 1;
+  const have = S.stats.poss[team]/tot*100;
+  return THREE.MathUtils.clamp(1 + (t-have)*0.030, 0.62, 1.45);
 }
 
 /* ================== rules ================== */
@@ -2303,12 +3205,13 @@ function kickoff(team){
   S.possTeam=team; S.pendingOffside=null;
   for(const p of players){
     const dir=S.dir[p.team];
-    let x=p.slot.x*(HALF_L*.92)*dir, z=p.slot.y*(HALF_W*.95);
+    let x=p.home.x*(HALF_L*.92)*dir, z=p.home.y*(HALF_W*.95);
     if(p.isGK) x=dir*-(HALF_L-1.6);
     x = dir>0 ? Math.min(x,-1) : Math.max(x,1);
     p.pos.set(x,z); p.vel.set(0,0); p.face = dir>0?0:Math.PI; p.celeb=0;
   }
-  const st = teamOf(team).find(p=>p.role==='ST');
+  const st = teamOf(team).find(p=>p.slot==='ST') || teamOf(team).find(p=>p.isFwd)
+           || teamOf(team).find(p=>!p.isGK);
   st.pos.set(-S.dir[team]*.8,.4);
   S.restart={type:'kickoff',team,taker:st,t:1.4};
   S.phase='restart';
@@ -2319,16 +3222,74 @@ function checkRules(){
   for(const s of [-1,1]){
     if(s*b.x > HALF_L+CFG.BALL_R*.5 && Math.abs(b.z)<CFG.GOAL_W/2 && b.y<CFG.GOAL_H){
       const scorer = S.dir[0]===s ? 0 : 1;
+
+      /* THE GUARANTEE. If the plan does not owe this side a goal, this
+         one never happened: it comes back off the keeper or the frame.
+         Enforcing it here rather than in the shooting code is the point
+         — a deflection, a scramble or an own goal cannot slip past a
+         rule that sits on the goal line itself. */
+      if(!scriptAllowsGoal(scorer)){
+        SCRIPT.blocked++;
+        const gk = keeperOf(1-scorer);
+        const away = -s;
+        if(Math.abs(b.z) > CFG.GOAL_W/2 - 1.1 || b.y > CFG.GOAL_H-0.5){
+          ball.pos.x = s*(HALF_L-CFG.BALL_R*1.2);
+          ball.vel.set(away*7+Math.random()*3, 2.2, ball.vel.z*0.4 + (Math.random()-.5)*5);
+          event('WOODWORK', 'off the frame');
+        } else {
+          ball.pos.x = s*(HALF_L-CFG.BALL_R*1.5);
+          ball.vel.set(away*8, 2.6, (Math.random()-.5)*11);
+          if(gk){
+            const sideDot = (ball.pos.z - gk.pos.y);
+            gk.dive = .85; gk.diveDir = sideDot>=0 ? 1 : -1;
+            gk.diveHigh = b.y > 1.15 ? 1 : 0;
+            gk.cool = .4; S.lastTouch = gk;
+            event('SAVE', gk.name+' keeps it out');
+            cutTo('save', 1.6);
+          }
+        }
+        ball.cool = .4; S.liveShot = null;
+        return;
+      }
+
       rippleNet(s, ball.pos.z, ball.pos.y);
       S.score[scorer]++;
-      const who = S.lastTouch && S.lastTouch.team===scorer ? S.lastTouch : null;
-      if(S.liveShot && S.liveShot.team===scorer) S.stats.onTarget[scorer]++;
+      const planned = markGoalScored(scorer);
+      /* The plan names the scorer, so the graphic credits him even if
+         the last touch in the box was somebody else's knee. */
+      let who = S.lastTouch && S.lastTouch.team===scorer ? S.lastTouch : null;
+      if(planned && (planned.pid || planned.scorer)){
+        const named = teamOf(scorer).find(q =>
+          (planned.pid && String(q.pid)===planned.pid) ||
+          (planned.scorer && q.name.toUpperCase()===String(planned.scorer).toUpperCase()));
+        if(named) who = named;
+      }
+      /* Name the finish. The shot carried its technique and the distance
+         it was struck from, so the graphic can say what it actually was
+         rather than just "goal". */
+      let how = '';
+      if(S.liveShot && S.liveShot.team===scorer){
+        S.stats.onTarget[scorer]++;
+        const f = FINISH[S.liveShot.kind];
+        if(f){
+          how = f.label;
+          if(S.liveShot.kind==='banger' || S.liveShot.d > 22)
+            how = Math.round(S.liveShot.d) + 'M ' + f.label;
+        }
+      } else if(who) how = 'SCRAMBLE';
+      if(planned && planned.finish){
+        const pf = FINISH[planned.finish];
+        how = pf ? pf.label : String(planned.finish).toUpperCase();
+      }
       S.liveShot = null;
       updateBoard();
-      lowerThird('GOAL', who?who.name:TEAMS[scorer].name, TEAMS[scorer].name+'  ·  '+clockLabel());
-      event('GOAL', (who?who.name+' — ':'')+S.score[0]+'-'+S.score[1]);
+      lowerThird('GOAL', who?who.name:TEAMS[scorer].name,
+        TEAMS[scorer].name + (how? '  ·  '+how : '') + '  ·  '+clockLabel());
+      event('GOAL', (who?who.name+' — ':'')+S.score[0]+'-'+S.score[1]+(how?'  ('+how.toLowerCase()+')':''));
       if(who){ who.celeb=4; for(const m of teamOf(scorer)) m.celeb=Math.max(m.celeb,2.2); }
       S.phase='goal'; S.freeze=5.2; S.goalSide=s; S.scorer=who; S.shake=1;
+      emit('goal', {team:scorer, scorer:who?who.name:null, pid:who?who.pid:null,
+                    finish:how, score:S.score.slice(), minute:clockLabel()});
       cutTo('celebration', 5.0);
       return;
     }
@@ -2351,19 +3312,83 @@ function checkRules(){
     }
   }
 }
+/* ---- penalties ----
+   The game had no way to award one, which left the director with no
+   legitimate way to settle a goal the plan insisted on but open play
+   would not produce. A spot kick is that way, and it is worth having in
+   its own right: everybody clears the area, the taker walks up, the
+   keeper picks a side and goes early. */
+function awardPenalty(team, taker, reason){
+  const dir = S.dir[team];
+  const spot = new THREE.Vector2(dir*(HALF_L-CFG.SPOT), 0);
+  const t = taker || bestPenaltyTaker(team);
+  S.phase='restart';
+  ball.owner=null; ball.vel.set(0,0,0); ball.spin=0;
+  ball.pos.set(spot.x, CFG.BALL_R, 0);
+  S.pendingOffside=null; S.liveShot=null; S.possTeam=team;
+  S.restart={type:'penalty', team, taker:t, t:2.6};
+  lowerThird('PENALTY', t?t.name:TEAMS[team].name, TEAMS[team].name+'  ·  '+clockLabel());
+  event('PENALTY', reason || (TEAMS[team].name+' — spot kick'));
+  cutTo('goal', 3.4);
+  emit('penalty', {team, taker:t?t.name:null, minute:clockLabel()});
+}
+function bestPenaltyTaker(team){
+  let best=null, bs=-1e9;
+  for(const p of teamOf(team)){
+    if(p.isGK) continue;
+    const sc = Amix(p,{shooting:2, composure:2, firstTouch:1})*100 + (isScriptScorer(p)?500:0);
+    if(sc>bs){ bs=sc; best=p; }
+  }
+  return best;
+}
+
 function stepRestart(dt){
   const r = S.restart;
   if(!r){ S.phase='play'; return; }
   r.t -= dt;
+  const pen = r.type==='penalty';
+  const dir = S.dir[r.team];
   for(const p of players){
     if(p===r.taker){
-      const to = new THREE.Vector2(ball.pos.x-p.pos.x, ball.pos.z-p.pos.y);
-      movePlayer(p, to.length()>1 ? to.normalize() : ZERO, false, dt);
+      // the taker sets himself a couple of paces behind the ball
+      const back = pen ? 2.6 : 0;
+      const tx = ball.pos.x - dir*back, tz = ball.pos.z;
+      const to = new THREE.Vector2(tx-p.pos.x, tz-p.pos.y);
+      movePlayer(p, to.length()>0.5 ? to.normalize() : ZERO, false, dt);
+      if(pen) p.face = Math.atan2(0-p.pos.y, dir*HALF_L-p.pos.x);
+      animate(p,dt);
+    } else if(pen && !p.isGK){
+      // everyone else has to be outside the area and behind the ball
+      const ring = new THREE.Vector2(
+        ball.pos.x - dir*(CFG.PEN_D - CFG.SPOT + 4 + (p.idx%3)*2.5),
+        ((p.idx%2)?1:-1)*(6 + (p.idx%5)*2.2));
+      const to = ring.sub(p.pos);
+      movePlayer(p, to.length()>0.6 ? to.normalize() : ZERO, false, dt);
+      p.face = Math.atan2(ball.pos.z-p.pos.y, ball.pos.x-p.pos.x);
+      animate(p,dt);
+    } else if(pen && p.isGK && p.team!==r.team){
+      const line = -dir*-(HALF_L-0.55);              // on his line, dancing
+      const to = new THREE.Vector2(line-p.pos.x, Math.sin(performance.now()/220)*1.1-p.pos.y);
+      movePlayer(p, to.clampLength(0,1), false, dt);
+      p.face = Math.atan2(ball.pos.z-p.pos.y, ball.pos.x-p.pos.x);
       animate(p,dt);
     } else aiPlayer(p,dt);
   }
   if(r.t<=0){
     S.phase='play'; ball.cool=0;
+    if(pen && r.taker){
+      const gk = keeperOf(1-r.team);
+      if(gk){                                        // he commits, usually wrongly
+        const guess = Math.random()<0.5 ? 1 : -1;
+        gk.dive = .85; gk.diveDir = guess; gk.diveHigh = Math.random()<0.4?1:0;
+        gk.cool = 0.9;
+      }
+      r.taker.pos.set(ball.pos.x - S.dir[r.team]*0.6, 0);
+      r.taker.face = Math.atan2(0-r.taker.pos.y, S.dir[r.team]*HALF_L-r.taker.pos.x);
+      doShot(r.taker, new THREE.Vector2(0,(Math.random()-.5)*.5), 0.85,
+             Math.random()<0.5 ? 'sidefoot' : 'sweep');
+      S.restart=null; return;
+    }
     if(r.taker){
       const d = Math.hypot(r.taker.pos.x-ball.pos.x, r.taker.pos.y-ball.pos.z);
       if(d<2.5){
@@ -2473,9 +3498,14 @@ function paintBug(){
   const d = el('bugDomain'); if(d) d.textContent = BRAND.domain;
 }
 paintBug();
-el('abbrA').textContent = TEAMS[0].abbr; el('abbrB').textContent = TEAMS[1].abbr;
-el('crestA').style.background = TEAMS[0].chip; el('crestB').style.background = TEAMS[1].chip;
-el('possFill').style.background = TEAMS[0].chip;
+/* The scoreboard reads off TEAMS, which loadSquads() may have replaced,
+   so it is repainted rather than written once at startup. */
+function paintBoard(){
+  el('abbrA').textContent = TEAMS[0].abbr; el('abbrB').textContent = TEAMS[1].abbr;
+  el('crestA').style.background = TEAMS[0].chip; el('crestB').style.background = TEAMS[1].chip;
+  el('possFill').style.background = TEAMS[0].chip;
+}
+paintBoard();
 function updateBoard(){ el('scoreA').textContent=S.score[0]; el('scoreB').textContent=S.score[1]; }
 function clockLabel(){
   const total = S.halfLen*2, elapsed = (S.half-1)*S.halfLen + S.clock;
@@ -2598,15 +3628,29 @@ function tick(dt){
   }
 
   S.clock += dt;
+  scriptTick();
   if(S.clock >= S.halfLen){
+    /* A referee plays added time, and so does this. If the plan is still
+       owed a goal we keep going — with urgency at its highest — rather
+       than blowing the whistle on a scoreline that disagrees with the
+       save file. Capped, so a plan that can never be satisfied still
+       ends the match. */
+    if(S.half===2 && SCRIPT.active && SCRIPT.events.some(e=>!e.fired)){
+      S.stoppage = (S.stoppage||0) + dt;
+      if(S.stoppage < S.halfLen*0.30){ el('clock').textContent = fmtClock(); return; }
+    }
     if(S.half===1){
       S.phase='half'; S.freeze=3;
       lowerThird('HT', S.score[0]+' — '+S.score[1], TEAMS[0].abbr+' v '+TEAMS[1].abbr);
       event('HALF TIME', S.score[0]+'-'+S.score[1]);
+      emit('halftime', {score:S.score.slice()});
     } else {
       S.phase='end';
       lowerThird('FT', S.score[0]+' — '+S.score[1], 'FULL TIME');
       event('FULL TIME', S.score[0]+'-'+S.score[1]);
+      emit('fulltime', {score:S.score.slice(), stats:S.stats,
+        scriptComplete: !SCRIPT.active || !SCRIPT.events.some(e=>!e.fired),
+        blocked: SCRIPT.blocked});
       setTimeout(()=>{
         S.running=false; el('menu').classList.remove('off');
         el('btnStart').textContent='PLAY AGAIN';
@@ -2636,7 +3680,11 @@ function seg(id, cb){
   });
 }
 seg('segLen', d=>S.halfLen=parseFloat(d.v));
-seg('segDiff', d=>S.aiSkill=parseFloat(d.v));
+/* Standalone only: the level of the two generated squads. Once the
+   manager game loads real players this does nothing, because the numbers
+   come from the save instead. */
+seg('segDiff', d=>{ const q=parseFloat(d.v); TEAMS[0].quality=q; TEAMS[1].quality=q;
+                    TEAMS[0].squad=null; TEAMS[1].squad=null; S.squadsDirty=true; });
 seg('segQual', d=>{
   S.quality = parseInt(d.v);
   renderer.shadowMap.enabled = !!S.quality;
@@ -2646,15 +3694,22 @@ seg('segQual', d=>{
 seg('camGrp', d=>{ S.camMode = d.cam; if(d.cam!=='auto') cutTo(d.cam, 1e9); else cutTo('broadcast',1); });
 seg('spdGrp', d=>S.speed = parseFloat(d.spd));
 
+function newMatch(){
+  if(S.squadsDirty){ buildTeams(); S.squadsDirty=false; }
+  reskinPitch();                                   // a freshly cut pitch each time
+  S.score=[0,0]; S.half=1; S.clock=0; S.dir=[1,-1];
+  S.stats={poss:[0,0],shots:[0,0],onTarget:[0,0],corners:[0,0]};
+  for(const p of players){ p.stamina=100; p.celeb=0; p.skill=0; p.dive=0; p.kickAnim=0; }
+  for(const e of SCRIPT.events) e.fired = false;
+  SCRIPT.blocked=0; SCRIPT.forced=0; SCRIPT.pending=null; SCRIPT.penWait=0; S.stoppage=0;
+  el('period').textContent='1ST'; updateBoard(); paintBoard();
+  kickoff(0); cutTo('broadcast',1);
+  event('KICK OFF', TEAMS[0].name+' v '+TEAMS[1].name);
+  emit('kickoff', {home:TEAMS[0].name, away:TEAMS[1].name, pitch:PITCH.cut.id});
+}
 el('btnStart').addEventListener('click', ()=>{
   el('menu').classList.add('off');
-  if(S.phase==='menu' || S.phase==='end'){
-    S.score=[0,0]; S.half=1; S.clock=0; S.dir=[1,-1];
-    S.stats={poss:[0,0],shots:[0,0],onTarget:[0,0],corners:[0,0]};
-    el('period').textContent='1ST'; updateBoard();
-    kickoff(0); cutTo('broadcast',1);
-    event('KICK OFF', TEAMS[0].name+' v '+TEAMS[1].name);
-  }
+  if(S.phase==='menu' || S.phase==='end') newMatch();
   S.running=true; last=performance.now();
 });
 el('btnPause').addEventListener('click', ()=>{
@@ -2679,7 +3734,136 @@ document.addEventListener('visibilitychange', ()=>{
   }
 });
 
+/* =====================================================================
+   PUBLIC API — how the football manager game drives this view
+   ---------------------------------------------------------------------
+   Drop this file into an iframe (or paste the script inline) and hand it
+   two squads. Nothing else needs to change: every decision on the pitch
+   is already read out of the attributes you pass in.
+
+     Matchday.loadSquads({
+       home: {
+         name:'MANCHESTER UNITED', abbr:'MUN',
+         shirt:'#da291c', trim:'#ffffff', shorts:'#ffffff', socks:'#000000',
+         pattern:'none',                 // none | stripe | hoop | sash | pinstripe
+         formation:'4-2-3-1',            // any key of FORMATIONS
+         mentality:'Attacking',          // Defensive Counter Balanced Attacking Overload
+         players:[ {
+           id:'12345', name:'Fernandes', number:8, slot:'AMC',
+           heightCm:179, weightKg:69,
+           attrs:{ passing:18, shooting:15, dribbling:14, tackling:9, crossing:15,
+                   firstTouch:16, heading:10, positioning:13, vision:18, workRate:17,
+                   decisions:16, composure:15, aggression:13, leadership:16,
+                   pace:13, acceleration:13, stamina:16, strength:11, agility:14 }
+         }, ...eleven of them ]
+       },
+       away: { ...same shape... }
+     });
+
+   Anything you leave out is filled in: a missing attribute reads as 10, a
+   missing height comes from the position's real-world distribution, a
+   missing player is generated. Pass the eleven starters in any order —
+   `slot` decides where each one stands, and the formation supplies the
+   shape.
+
+   Then:  Matchday.start()  .pause()  .resume()
+          Matchday.setCamera('auto'|'broadcast'|'tele'|'goal')
+          Matchday.setSpeed(1|2|4)     Matchday.setHalfLength(seconds)
+          Matchday.on('goal', fn)      also: kickoff, halftime, fulltime, shot
+          Matchday.getState()          score, clock, possession, shots
+   ===================================================================== */
+const LISTENERS = {};
+function emit(name, payload){
+  const list = LISTENERS[name];
+  if(!list) return;
+  for(const fn of list){ try{ fn(payload); }catch(e){ /* a listener must not stop play */ } }
+}
+function applyTeam(slotIdx, cfg){
+  if(!cfg) return;
+  const T = TEAMS[slotIdx];
+  for(const k of ['name','abbr','shirt','trim','shorts','socks','sleeve','pattern',
+                  'radar','chip','sponsor','sponsorInk','numberInk','formation',
+                  'mentality','quality'])
+    if(cfg[k] != null) T[k] = cfg[k];
+  if(!MENT_MOD[T.mentality]) T.mentality = 'Balanced';
+  if(!FORMATIONS[T.formation]) T.formation = '4-3-3';
+  if(cfg.gkKit) Object.assign(GK_KITS[slotIdx], cfg.gkKit);
+  if(Array.isArray(cfg.players) && cfg.players.length){
+    /* Order the eleven by the formation's slots so each man lines up in
+       the position he was picked in, whatever order they arrived in. */
+    const shape = FORMATIONS[T.formation];
+    const pool = cfg.players.slice(0,11);
+    const out = [];
+    for(const [slot] of shape){
+      let i = pool.findIndex(q => q && (q.slot||'').toUpperCase() === slot);
+      if(i < 0) i = pool.findIndex(q => q);
+      out.push(i>=0 ? pool.splice(i,1)[0] : null);
+    }
+    T.squad = out.map(q => q || {});
+  } else T.squad = null;
+  T.chip  = T.chip  || T.shirt;
+  T.radar = T.radar || T.shirt;
+}
+window.Matchday = {
+  version: '2.0',
+  ATTR_KEYS, FORMATIONS, MENTALITIES: Object.keys(MENT_MOD),
+  SLOTS: Object.keys(SLOT_GROUP),
+  loadSquads(cfg){
+    cfg = cfg || {};
+    applyTeam(0, cfg.home); applyTeam(1, cfg.away);
+    buildTeams(); S.squadsDirty = false;
+    paintBoard();
+    S.phase = 'menu'; S.running = false;
+    kickoff(0);
+    for(const p of players) animate(p, 0);
+    return this;
+  },
+  /* Hand over the match your own model produced. Every goal in `events`
+     will be scored, by the man you name, at about the minute you name —
+     and nothing else will be. Anything else that would have gone in
+     becomes a save or the woodwork.
+
+       Matchday.playScript({
+         events:[ {minute:23, team:0, pid:'123', scorer:'Rashford', finish:'header'},
+                  {minute:58, team:1, scorer:'Watkins'},
+                  {minute:81, team:0, scorer:'Rashford', finish:'banger'} ],
+         stats:{ shots:[15,8], possession:[61,39] }
+       }).start();
+
+     `finish` is optional and takes any key of FINISH (tapin, sidefoot,
+     sweep, curler, banger, chip, volley, halfvolley, header,
+     divingheader). `stats` is optional and steers rather than clamps. */
+  playScript(plan){ loadScript(plan); return this; },
+  clearScript(){ clearScript(); return this; },
+  scriptState(){ return {active:SCRIPT.active, blocked:SCRIPT.blocked,
+    remaining:SCRIPT.events.filter(e=>!e.fired).length,
+    events:SCRIPT.events.map(e=>({minute:e.minute, team:e.team, scorer:e.scorer, fired:e.fired}))}; },
+  FINISHES: Object.keys(FINISH),
+  start(){ el('menu').classList.add('off'); newMatch(); S.running=true; last=performance.now(); return this; },
+  pause(){ S.running=false; return this; },
+  resume(){ el('menu').classList.add('off'); S.running=true; last=performance.now(); return this; },
+  setCamera(m){ S.camMode=m; if(m!=='auto') cutTo(m,1e9); else cutTo('broadcast',1); return this; },
+  setSpeed(v){ S.speed = Math.max(0.25, Math.min(8, +v||1)); return this; },
+  setHalfLength(sec){ S.halfLen = Math.max(30, +sec||240); return this; },
+  setQuality(q){ S.quality = q?1:0; renderer.shadowMap.enabled = !!q;
+                 renderer.setPixelRatio(q?Math.min(devicePixelRatio||1,2):1);
+                 autoTuned = true; return this; },
+  recutPitch(){ reskinPitch(); return this; },
+  on(name, fn){ (LISTENERS[name] || (LISTENERS[name]=[])).push(fn); return this; },
+  off(name, fn){ const l=LISTENERS[name]; if(l) LISTENERS[name]=l.filter(f=>f!==fn); return this; },
+  getState(){
+    const t = S.stats.poss[0]+S.stats.poss[1] || 1;
+    return { phase:S.phase, running:S.running, half:S.half, minute:clockLabel(),
+      score:S.score.slice(),
+      teams:[TEAMS[0].name, TEAMS[1].name],
+      possession:[Math.round(S.stats.poss[0]/t*100), Math.round(S.stats.poss[1]/t*100)],
+      shots:S.stats.shots.slice(), onTarget:S.stats.onTarget.slice(),
+      corners:S.stats.corners.slice(), pitch:PITCH.cut.id };
+  }
+};
+
 /* ================== go ================== */
+paintBoard();
 kickoff(0);
 for(const p of players) animate(p, 0);
 for(const o of officials) animateLite(o);
