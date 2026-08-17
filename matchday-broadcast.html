@@ -4,6 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>Matchday — Broadcast</title>
+<!--
+  Matchday Broadcast — AI vs AI football, presented as a television feed.
+
+  Two things worth knowing before you edit:
+
+  1. YOUR LOGO. Search for "const BRAND" and set logoSrc to a data URI of
+     your United Road artwork. Everything brand-facing — the LED boards,
+     the big screen, the on-screen bug — repaints itself the moment it
+     loads. Until then a procedural mark stands in.
+
+  2. JOINT SIGNS. Search for "JOINT CONVENTION". The rig is built so a
+     knee can only fold backwards and an elbow only forwards; poses are
+     assembled from terms that cannot go negative. Keep to that and legs
+     will never bend inside out again.
+-->
 <style>
   *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   html,body{width:100%;height:100%;overflow:hidden;background:#03050d;
@@ -94,6 +109,37 @@
   #load{position:fixed;inset:0;z-index:40;background:#03050d;display:flex;
     align-items:center;justify-content:center;color:#e9ff4a;font-size:11px;letter-spacing:.35em}
   #load.off{display:none}
+
+  /* -------- broadcast grade --------
+     A vignette, a cool lift in the shadows and a whisper of grain. None
+     of this costs a draw call and together they do most of what a real
+     post chain would: they stop the render reading as a render. */
+  #grade{position:fixed;inset:0;z-index:5;pointer-events:none;
+    background:radial-gradient(125% 92% at 50% 44%,
+      rgba(0,0,0,0) 38%, rgba(0,0,0,.20) 70%, rgba(2,4,12,.62) 100%)}
+  #tint{position:fixed;inset:0;z-index:5;pointer-events:none;opacity:.16;
+    mix-blend-mode:screen;
+    background:linear-gradient(178deg, rgba(80,130,255,.55) 0%,
+      rgba(0,0,0,0) 46%, rgba(255,178,90,.30) 100%)}
+  #grain{position:fixed;inset:-60%;z-index:6;pointer-events:none;opacity:.05;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    animation:grain 1.1s steps(5) infinite}
+  @keyframes grain{
+    0%{transform:translate(0,0)}      20%{transform:translate(-3%,-4%)}
+    40%{transform:translate(2%,3%)}   60%{transform:translate(-2%,4%)}
+    80%{transform:translate(4%,-2%)}  100%{transform:translate(0,0)}}
+
+  /* -------- brand bug -------- */
+  #bug{position:absolute;top:calc(env(safe-area-inset-top,0px) + 78px);left:12px;
+    display:flex;align-items:center;gap:7px;padding:5px 9px 5px 6px;
+    background:linear-gradient(90deg,rgba(10,12,16,.92),rgba(10,12,16,.55));
+    border-left:3px solid #da291c;border-radius:3px}
+  #bug canvas{width:22px;height:22px;display:block;border-radius:3px}
+  #bug b{font-size:10px;letter-spacing:.16em;color:#fff;font-weight:700;line-height:1.15}
+  #bug i{font-size:8px;letter-spacing:.14em;color:#f5c518;font-style:normal;display:block}
+  .live{display:inline-block;width:5px;height:5px;border-radius:50%;background:#ff3b3b;
+    margin-right:5px;vertical-align:middle;animation:pulse 1.6s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
 </style>
 </head>
 <body>
@@ -108,6 +154,8 @@
     <div class="crest" id="crestB"></div>
   </div>
   <div class="poss"><div id="possFill"></div><span id="possA">50%</span><span id="possB">50%</span></div>
+  <div id="bug"><canvas id="bugLogo" width="64" height="64"></canvas>
+    <b><span class="live"></span>UNITED ROAD<i id="bugDomain">unitedroad.uk</i></b></div>
 
   <div class="rail">
     <div class="grp">
@@ -139,7 +187,7 @@
 <div id="menu">
   <div class="card2">
     <h1>MATCHDAY<br><em>BROADCAST</em></h1>
-    <p>Northgate against Valemont, played out by the AI. You're in the gantry — pick a camera, change the speed, and watch. AUTO cuts to the goal camera when someone scores.</p>
+    <p>Northgate against Valemont, played out by the AI under the lights at United Road. You're in the gantry — pick a camera, change the speed, and watch. AUTO cuts to the keeper for a save and behind the goal for a celebration.</p>
     <div class="row"><label>HALF LENGTH</label>
       <div class="seg" id="segLen"><button data-v="120">2m</button><button data-v="240" class="on">4m</button><button data-v="420">7m</button></div></div>
     <div class="row"><label>TEMPO</label>
@@ -149,6 +197,9 @@
     <button class="go" id="btnStart">KICK OFF</button>
   </div>
 </div>
+<div id="grade"></div>
+<div id="tint"></div>
+<div id="grain"></div>
 <div id="load">WARMING UP</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -160,6 +211,40 @@
    this build replaces control with a camera director and a full art pass.
    ===================================================================== */
 
+/* =====================================================================
+   BRAND — everything United Road, in one place.
+
+   >>> TO USE YOUR REAL LOGO: set logoSrc below. <<<
+   It accepts a data URI (best — keeps this file self-contained and
+   avoids canvas tainting) or any same-origin / CORS-enabled URL:
+
+       logoSrc: 'data:image/png;base64,iVBORw0KGgo...'
+
+   It loads asynchronously and repaints the LED boards, the shirt-sponsor
+   patch and the big-screen bug the moment it arrives, so nothing has to
+   wait on it. Leave it null and the procedural mark below is drawn
+   instead — a road running to a horizon inside a rounded badge, which is
+   what the boards ship with until you paste the real artwork in.
+   ===================================================================== */
+const BRAND = {
+  name:      'UNITED ROAD',
+  domain:    'unitedroad.uk',
+  youtube:   '@unitedroad',              // <-- put your real handle here
+  tagline:   'FOLLOW THE ROAD',
+  ink:       '#ffffff',
+  red:       '#da291c',
+  deep:      '#0a0c10',
+  gold:      '#f5c518',
+  logoSrc:   null                        // <-- your logo goes here
+};
+const BRAND_LOGO = { img:null, ready:false };
+if(BRAND.logoSrc){
+  const im = new Image();
+  im.crossOrigin = 'anonymous';
+  im.onload = ()=>{ BRAND_LOGO.img = im; BRAND_LOGO.ready = true; repaintBrand(); };
+  im.src = BRAND.logoSrc;
+}
+
 const CFG = {
   L:105, W:68, GOAL_W:7.32, GOAL_H:2.44,
   PEN_D:16.5, PEN_W:40.32, SIX_D:5.5, SIX_W:18.32,
@@ -170,13 +255,20 @@ const HALF_L = CFG.L/2, HALF_W = CFG.W/2;
 
 const TEAMS = [
   { name:'NORTHGATE', abbr:'NOR', shirt:'#16307d', trim:'#f3f6ff', shorts:'#f3f6ff',
-    socks:'#16307d', stripe:false, radar:'#5b8bff', chip:'#16307d',
+    socks:'#16307d', sleeve:'#0f2260', pattern:'pinstripe', radar:'#5b8bff', chip:'#16307d',
+    sponsor:BRAND.name, sponsorInk:'#ffffff', numberInk:'#ffffff',
     names:['HOLT','BRENNAN','VOSS','KEATING','ADEYEMI','SANDERS','MARCHETTI','OKONKWO','LINDQVIST','REYES','BAPTISTE'] },
   { name:'VALEMONT', abbr:'VAL', shirt:'#b02024', trim:'#1a1a1f', shorts:'#1a1a1f',
-    socks:'#b02024', stripe:true, radar:'#ff6b6b', chip:'#b02024',
+    socks:'#b02024', sleeve:'#8c161a', pattern:'stripe', radar:'#ff6b6b', chip:'#b02024',
+    sponsor:'THE RESULTS BUSINESS', sponsorInk:'#ffffff', numberInk:'#ffffff',
     names:['DUARTE','FALK','NAKAMURA','ROSSI','ELLIOTT','KOVAC','TRAORE','MENDES','HALVORSEN','CRUZ','WEBB'] }
 ];
-const GK_KIT = { shirt:'#1fbf7a', trim:'#0d2a1e', shorts:'#0d2a1e', socks:'#1fbf7a', stripe:false };
+const GK_KITS = [
+  { shirt:'#1fbf7a', trim:'#0d2a1e', shorts:'#0d2a1e', socks:'#1fbf7a', sleeve:'#17a066',
+    pattern:'none', numberInk:'#0d2a1e' },
+  { shirt:'#f2b52a', trim:'#241a06', shorts:'#241a06', socks:'#f2b52a', sleeve:'#d69b16',
+    pattern:'none', numberInk:'#241a06' }
+];
 
 const FORMATION = [
   ['GK', -0.97,  0.00],
@@ -201,7 +293,7 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputEncoding = THREE.sRGBEncoding;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.15;
+renderer.toneMappingExposure = 0.92;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
@@ -226,31 +318,65 @@ function tex(c, rx, ry){
 }
 
 function pitchTexture(){
-  const M=6, ppm=15;
+  const M=6, ppm=18;
   const c = cv(Math.round((CFG.L+M*2)*ppm), Math.round((CFG.W+M*2)*ppm)), g = c.getContext('2d');
   const px = x=>(x+HALF_L+M)*ppm, py = z=>(z+HALF_W+M)*ppm;
-  g.fillStyle='#1d5423'; g.fillRect(0,0,c.width,c.height);
+  g.fillStyle='#123d18'; g.fillRect(0,0,c.width,c.height);
 
-  const bands=14, bw=CFG.L/bands;
+  /* Mow stripes. A real roller leaves the grass lying toward or away
+     from you, so each band is a gradient rather than a flat fill, and
+     alternate bands carry a faint cross-cut from the second pass. */
+  const bands=18, bw=CFG.L/bands;
   for(let i=0;i<bands;i++){
-    const grd = g.createLinearGradient(px(-HALF_L+i*bw),0,px(-HALF_L+(i+1)*bw),0);
-    const a = i%2 ? '#3f9440' : '#347c36', b = i%2 ? '#43994a' : '#31783a';
+    const x0=px(-HALF_L+i*bw), x1=px(-HALF_L+(i+1)*bw);
+    const grd = g.createLinearGradient(x0,0,x1,0);
+    const a = i%2 ? '#235d28' : '#1f5726', b = i%2 ? '#286a2e' : '#1d5324';
     grd.addColorStop(0,a); grd.addColorStop(.5,b); grd.addColorStop(1,a);
-    g.fillStyle = grd;
-    g.fillRect(px(-HALF_L+i*bw), py(-HALF_W), bw*ppm+1, CFG.W*ppm);
+    g.fillStyle=grd; g.fillRect(x0, py(-HALF_W), (x1-x0)+1, CFG.W*ppm);
   }
+  g.globalAlpha=.055;                                  // cross-cut, the second pass
+  for(let j=0;j<24;j++){
+    g.fillStyle = j%2 ? '#ffffff' : '#000000';
+    g.fillRect(px(-HALF_L), py(-HALF_W)+j*(CFG.W*ppm/24), CFG.L*ppm, CFG.W*ppm/24);
+  }
+  g.globalAlpha=1;
+
+  // a mown-in brand stencil either side of the halfway line
+  g.save();
+  g.globalAlpha=.045; g.fillStyle='#ffffff';
+  g.textAlign='center'; g.textBaseline='middle';
+  for(const s of [-1,1]){
+    g.save();
+    g.translate(px(s*26), py(0)); g.rotate(s>0?0:Math.PI);
+    g.font='900 '+(3.4*ppm)+'px "Arial Narrow",Arial,sans-serif';
+    g.fillText(BRAND.name, 0, 0);
+    g.font='bold '+(1.5*ppm)+'px Arial,sans-serif';
+    g.fillText(BRAND.domain, 0, 2.6*ppm);
+    g.restore();
+  }
+  g.restore();
+
   // wear: goalmouths, centre circle, penalty spots
   const wear=(x,z,r,a)=>{
     const gr=g.createRadialGradient(px(x),py(z),0,px(x),py(z),r*ppm);
-    gr.addColorStop(0,'rgba(120,96,52,'+a+')'); gr.addColorStop(1,'rgba(120,96,52,0)');
+    gr.addColorStop(0,'rgba(126,102,56,'+a+')'); gr.addColorStop(1,'rgba(126,102,56,0)');
     g.fillStyle=gr; g.fillRect(px(x-r),py(z-r),r*2*ppm,r*2*ppm);
   };
-  for(const s of [-1,1]){ wear(s*(HALF_L-2.5),0,7,.22); wear(s*(HALF_L-CFG.SPOT),0,2.4,.18); }
-  wear(0,0,3.2,.15);
-  g.globalAlpha=.05;
-  for(let i=0;i<5200;i++){
+  for(const s of [-1,1]){
+    wear(s*(HALF_L-2.5),0,7.5,.26); wear(s*(HALF_L-CFG.SPOT),0,2.4,.20);
+    wear(s*(HALF_L-CFG.PEN_D),0,9,.10);
+  }
+  wear(0,0,3.4,.17);
+  g.globalAlpha=.05;                                   // divots and clippings
+  for(let i=0;i<9000;i++){
     g.fillStyle = Math.random()>.5?'#ffffff':'#000000';
-    g.fillRect(Math.random()*c.width, Math.random()*c.height, 2+Math.random()*8, 2);
+    g.fillRect(Math.random()*c.width, Math.random()*c.height, 2+Math.random()*9, 2);
+  }
+  g.globalAlpha=.10;
+  for(let i=0;i<340;i++){
+    g.fillStyle='#6b5a30';
+    const bx=Math.random()*c.width, by=Math.random()*c.height;
+    g.fillRect(bx,by,3+Math.random()*10,2+Math.random()*4);
   }
   g.globalAlpha=1;
 
@@ -295,89 +421,352 @@ function grassNormal(){
   return t;
 }
 
-function crowdTexture(){
-  const c = cv(512,256), g = c.getContext('2d');
-  const grd = g.createLinearGradient(0,0,0,256);
-  grd.addColorStop(0,'#05080f'); grd.addColorStop(1,'#0d1426');
-  g.fillStyle=grd; g.fillRect(0,0,512,256);
-  const cols=['#e7ecf7','#9aa4c0','#39415f','#cdd4e4','#20283f','#5a6party','#e8c88c'];
-  const pal=['#e7ecf7','#9aa4c0','#39415f','#cdd4e4','#20283f','#566188','#e8c88c','#7d3a3a','#2f5f7a'];
-  for(let row=6; row<256; row+=9){
-    for(let x=4; x<512; x+=8){
-      const jx=x+(Math.random()*3-1.5), jy=row+(Math.random()*3-1.5);
-      g.fillStyle = pal[(Math.random()*pal.length)|0];
-      g.globalAlpha = .45+Math.random()*.55;
-      g.fillRect(jx,jy,4,5);                       // body
-      g.fillStyle = 'rgba(20,18,22,.55)';
-      g.fillRect(jx+.6,jy-2.4,2.8,2.6);            // head
+/* A stand is rows of seats with people in some of them, lit from the
+   roof down. Painting the empty seat first and the supporter over it —
+   and leaving perhaps one seat in eight empty — is what stops the tier
+   reading as flat noise. `home` tints a bloc of shirts in club colour. */
+function crowdTexture(home){
+  const c = cv(1024,512), g = c.getContext('2d');
+  const grd = g.createLinearGradient(0,0,0,512);
+  grd.addColorStop(0,'#0a0f1c'); grd.addColorStop(.35,'#141c30'); grd.addColorStop(1,'#1d2740');
+  g.fillStyle=grd; g.fillRect(0,0,1024,512);
+
+  const pal=['#e7ecf7','#9aa4c0','#39415f','#cdd4e4','#20283f','#566188','#e8c88c','#7d3a3a','#2f5f7a','#1b2438'];
+  const rows=52, rh=512/rows;
+  for(let r=0;r<rows;r++){
+    const y = r*rh;
+    const depth = 0.60 + (r/rows)*0.40;                 // upper rows sit in roof shadow
+    g.fillStyle='rgba(10,15,28,'+(0.58-depth*0.26)+')'; // the seat backs
+    g.fillRect(0,y,1024,rh*0.92);
+    for(let x=2;x<1024;x+=11){
+      if(Math.random()<0.13) continue;                  // an empty seat here and there
+      const jx=x+(Math.random()*2.4-1.2), jy=y+(Math.random()*2.2-1.1);
+      let col = pal[(Math.random()*pal.length)|0];
+      if(home && Math.random()<0.42) col = home;        // the bloc behind the goal
+      g.globalAlpha = (0.62+Math.random()*0.38)*depth;
+      g.fillStyle = col; g.fillRect(jx, jy+2.4, 5.4, 6.2);          // body
+      g.fillStyle = 'rgba(24,20,26,.62)'; g.fillRect(jx+1, jy, 3.4, 3.2); // head
     }
   }
+  g.globalAlpha=1;
+  // gangways cut down through the tier
+  g.fillStyle='rgba(3,5,10,.85)';
+  for(let x=96;x<1024;x+=190) g.fillRect(x,0,9,512);
+  // handrails catching the floodlights
+  g.globalAlpha=.16; g.fillStyle='#cfe0ff';
+  for(let r=8;r<rows;r+=8) g.fillRect(0,r*rh,1024,1.4);
   g.globalAlpha=1;
   return tex(c,1,1);
 }
 
-function ledTexture(){
-  const c = cv(2048,96), g = c.getContext('2d');
-  const ads=[['NOVA ENERGY','#0b2a7a','#e9ff4a'],['KESTREL AIR','#111318','#ff5252'],
-             ['HALDEN TYRES','#0d5b3a','#ffffff'],['MERIDIAN BANK','#3a1060','#9fe8ff'],
-             ['ATLAS SPORTS','#7a1010','#ffe0a3'],['CIRRUS TELECOM','#052f4a','#7dffd0']];
-  const seg = 2048/ads.length;
-  ads.forEach((a,i)=>{
-    g.fillStyle=a[1]; g.fillRect(i*seg,0,seg,96);
-    g.fillStyle='rgba(255,255,255,.07)'; g.fillRect(i*seg,0,seg,26);
-    g.fillStyle=a[2]; g.font='bold 42px Arial'; g.textAlign='center'; g.textBaseline='middle';
-    g.fillText(a[0], i*seg+seg/2, 52);
-  });
-  const t = tex(c); t.wrapS = THREE.RepeatWrapping; t.repeat.set(4,1);
-  return t;
-}
-
-function netTexture(){
-  const c = cv(128,128), g = c.getContext('2d');
-  g.clearRect(0,0,128,128);
-  g.strokeStyle='rgba(255,255,255,.92)'; g.lineWidth=1.5;
-  for(let i=0;i<=128;i+=8){
-    g.beginPath(); g.moveTo(i,0); g.lineTo(i,128); g.stroke();
-    g.beginPath(); g.moveTo(0,i); g.lineTo(128,i); g.stroke();
-  }
-  const t=new THREE.CanvasTexture(c); t.wrapS=t.wrapT=THREE.RepeatWrapping; return t;
-}
-
-function ballTexture(){
-  const c = cv(512,256), g = c.getContext('2d');
-  g.fillStyle='#f7f9fc'; g.fillRect(0,0,512,256);
-  g.fillStyle='#12161f';
-  for(let i=0;i<11;i++){
-    const x=Math.random()*512, y=30+Math.random()*196, r=17+Math.random()*10;
-    g.beginPath();
-    for(let k=0;k<5;k++){
-      const a=k/5*Math.PI*2+Math.random()*.3;
-      const px=x+Math.cos(a)*r, py=y+Math.sin(a)*r;
-      k?g.lineTo(px,py):g.moveTo(px,py);
-    }
-    g.closePath(); g.fill();
-  }
-  g.strokeStyle='#c8ceda'; g.lineWidth=2;
-  for(let i=0;i<7;i++){ g.beginPath(); g.arc(Math.random()*512,Math.random()*256,20,0,7); g.stroke(); }
+/* The scoreboard on the end stand — carries the brand between replays. */
+function bigscreenTexture(){
+  const c = cv(1024,512), g = c.getContext('2d');
+  g.fillStyle='#04060a'; g.fillRect(0,0,1024,512);
+  const gr=g.createLinearGradient(0,0,1024,512);
+  gr.addColorStop(0,'#12161f'); gr.addColorStop(1,'#05070b');
+  g.fillStyle=gr; g.fillRect(12,12,1000,488);
+  drawBrandLogo(g, 512, 190, 210);
+  g.textAlign='center'; g.textBaseline='middle';
+  g.fillStyle='#ffffff'; g.font='900 92px "Arial Narrow",Arial,sans-serif';
+  g.fillText(BRAND.name, 512, 350);
+  g.fillStyle=BRAND.gold; g.font='bold 46px Arial,sans-serif';
+  g.fillText(BRAND.domain, 512, 418);
+  g.fillStyle=BRAND.red; g.fillRect(12,470,1000,14);
+  g.globalAlpha=.22; g.fillStyle='#000';                 // pixel pitch
+  for(let y=0;y<512;y+=4) g.fillRect(0,y,1024,1);
+  for(let x=0;x<1024;x+=4) g.fillRect(x,0,1,512);
+  g.globalAlpha=1;
   return tex(c);
 }
 
-function kitTexture(kit, number){
-  const c = cv(256,128), g = c.getContext('2d');
-  g.fillStyle = kit.shirt; g.fillRect(0,0,256,128);
-  if(kit.stripe){
-    g.fillStyle = kit.trim;
-    for(let x=0;x<256;x+=32) g.fillRect(x,0,16,128);
+/* ================== advertising ================== */
+function roundRect(g,x,y,w,h,r){
+  r = Math.min(r, w/2, h/2);
+  g.beginPath();
+  g.moveTo(x+r,y); g.arcTo(x+w,y,x+w,y+h,r); g.arcTo(x+w,y+h,x,y+h,r);
+  g.arcTo(x,y+h,x,y,r); g.arcTo(x,y,x+w,y,r); g.closePath();
+}
+
+/* The fallback United Road mark: a road running away to a lit horizon
+   inside a rounded badge. Replaced wholesale the moment BRAND.logoSrc
+   resolves — see drawBrandLogo(). */
+function drawURMark(g, cx, cy, s){
+  g.save(); g.translate(cx,cy);
+  const r = s*0.22;
+  roundRect(g,-s/2,-s/2,s,s,r);
+  const bg = g.createLinearGradient(-s/2,-s/2,s/2,s/2);
+  bg.addColorStop(0,'#1c2028'); bg.addColorStop(1,'#04060a');
+  g.fillStyle=bg; g.fill();
+  g.save();
+  roundRect(g,-s/2,-s/2,s,s,r); g.clip();
+  const sky=g.createLinearGradient(0,-s/2,0,-s*0.14);
+  sky.addColorStop(0,'rgba(218,41,28,0)'); sky.addColorStop(1,'rgba(218,41,28,.6)');
+  g.fillStyle=sky; g.fillRect(-s/2,-s/2,s,s*0.36);
+  g.beginPath();
+  g.moveTo(-s*0.42,s*0.44); g.lineTo(-s*0.07,-s*0.14);
+  g.lineTo(s*0.07,-s*0.14); g.lineTo(s*0.42,s*0.44); g.closePath();
+  const rd=g.createLinearGradient(0,-s*0.14,0,s*0.44);
+  rd.addColorStop(0,'#39404e'); rd.addColorStop(1,'#cbd0da');
+  g.fillStyle=rd; g.fill();
+  g.fillStyle=BRAND.gold;
+  for(let i=0;i<4;i++){
+    const t0=i/4, t1=t0+0.14;
+    const w0=s*0.010+t0*s*0.048, w1=s*0.010+t1*s*0.048;
+    const y0=-s*0.14+t0*s*0.58,  y1=-s*0.14+t1*s*0.58;
+    g.beginPath(); g.moveTo(-w0,y0); g.lineTo(w0,y0); g.lineTo(w1,y1); g.lineTo(-w1,y1);
+    g.closePath(); g.fill();
   }
-  g.fillStyle='rgba(0,0,0,.16)'; g.fillRect(0,104,256,24);       // shadow at the hem
-  g.fillStyle='rgba(255,255,255,.10)'; g.fillRect(0,0,256,16);   // collar highlight
+  g.restore();
+  roundRect(g,-s/2,-s/2,s,s,r);
+  g.lineWidth=s*0.05; g.strokeStyle=BRAND.red; g.stroke();
+  g.restore();
+}
+function drawBrandLogo(g, cx, cy, s){
+  if(BRAND_LOGO.ready && BRAND_LOGO.img){
+    const im = BRAND_LOGO.img;
+    const k = Math.min(s/im.width, s/im.height);          // fit, never distort
+    g.drawImage(im, cx-im.width*k/2, cy-im.height*k/2, im.width*k, im.height*k);
+  } else drawURMark(g, cx, cy, s);
+}
+
+/* Each creative paints into its own SEG-wide slot on one long strip. The
+   strip scrolls behind the goal-line boards exactly like a real LED rig. */
+const AD_SEG = 512, AD_H = 128;
+const CREATIVES = [
+  function unitedRoad(g,x){
+    const gr=g.createLinearGradient(x,0,x+AD_SEG,AD_H);
+    gr.addColorStop(0,'#000000'); gr.addColorStop(.55,BRAND.deep); gr.addColorStop(1,'#1d0605');
+    g.fillStyle=gr; g.fillRect(x,0,AD_SEG,AD_H);
+    g.fillStyle=BRAND.red; g.fillRect(x,AD_H-9,AD_SEG,9);
+    drawBrandLogo(g, x+72, AD_H/2, 96);
+    g.textAlign='left'; g.textBaseline='alphabetic';
+    g.fillStyle=BRAND.ink; g.font='900 52px "Arial Narrow",Arial,sans-serif';
+    g.fillText(BRAND.name, x+140, AD_H/2+6);
+    g.fillStyle=BRAND.gold; g.font='bold 25px Arial,sans-serif';
+    g.fillText(BRAND.domain, x+142, AD_H/2+40);
+  },
+  function domain(g,x){
+    g.fillStyle=BRAND.red; g.fillRect(x,0,AD_SEG,AD_H);
+    g.fillStyle='rgba(0,0,0,.22)'; g.fillRect(x,0,AD_SEG,30);
+    g.textAlign='center'; g.textBaseline='middle';
+    g.fillStyle='#ffffff'; g.font='900 68px "Arial Narrow",Arial,sans-serif';
+    g.fillText(BRAND.domain.toUpperCase(), x+AD_SEG/2, AD_H/2-8);
+    g.fillStyle='rgba(255,255,255,.82)'; g.font='bold 21px Arial,sans-serif';
+    g.fillText(BRAND.tagline, x+AD_SEG/2, AD_H/2+38);
+  },
+  function youtube(g,x){
+    g.fillStyle='#0b0b0d'; g.fillRect(x,0,AD_SEG,AD_H);
+    const cx=x+80, cy=AD_H/2;
+    roundRect(g,cx-46,cy-32,92,64,18); g.fillStyle='#ff0033'; g.fill();
+    g.beginPath(); g.moveTo(cx-13,cy-19); g.lineTo(cx+22,cy); g.lineTo(cx-13,cy+19);
+    g.closePath(); g.fillStyle='#ffffff'; g.fill();
+    g.textAlign='left'; g.textBaseline='alphabetic';
+    g.fillStyle='#ffffff'; g.font='900 44px "Arial Narrow",Arial,sans-serif';
+    g.fillText('SUBSCRIBE', x+146, cy-2);
+    g.fillStyle=BRAND.gold; g.font='bold 27px Arial,sans-serif';
+    g.fillText('YOUTUBE  '+BRAND.youtube, x+148, cy+33);
+  },
+  function results(g,x){
+    const gr=g.createLinearGradient(x,0,x+AD_SEG,AD_H);
+    gr.addColorStop(0,'#17271b'); gr.addColorStop(1,'#050806');
+    g.fillStyle=gr; g.fillRect(x,0,AD_SEG,AD_H);
+    g.fillStyle='#eef3ee';                                     // the three-bar mark
+    g.fillRect(x+30,AD_H/2-38,86,14); g.fillRect(x+30,AD_H/2-7,62,14); g.fillRect(x+30,AD_H/2+24,86,14);
+    g.save(); g.translate(x+108,AD_H/2); g.rotate(0.21);
+    const rd=g.createLinearGradient(-13,-13,13,13);
+    rd.addColorStop(0,'#ff4a3c'); rd.addColorStop(1,'#a91810');
+    g.fillStyle=rd; g.fillRect(-13,-13,26,26); g.restore();
+    g.textAlign='left'; g.textBaseline='alphabetic';
+    g.fillStyle='#eef3ee'; g.font='900 38px "Arial Narrow",Arial,sans-serif';
+    g.fillText('THE RESULTS BUSINESS', x+150, AD_H/2+2);
+    g.fillStyle='#fbe122'; g.font='bold 22px Arial,sans-serif';
+    g.fillText('FOOTBALL MANAGEMENT CAREER', x+152, AD_H/2+34);
+  },
+  function unitedRoadAlt(g,x){
+    g.fillStyle=BRAND.deep; g.fillRect(x,0,AD_SEG,AD_H);
+    for(let i=0;i<7;i++){                                       // forward chevrons
+      g.beginPath();
+      const bx=x+34+i*68;
+      g.moveTo(bx,22); g.lineTo(bx+30,AD_H/2); g.lineTo(bx,AD_H-22);
+      g.lineTo(bx+16,AD_H-22); g.lineTo(bx+46,AD_H/2); g.lineTo(bx+16,22);
+      g.closePath();
+      g.fillStyle='rgba(218,41,28,'+(0.14+i*0.12)+')'; g.fill();
+    }
+    g.textAlign='right'; g.textBaseline='middle';
+    g.fillStyle='#ffffff'; g.font='900 46px "Arial Narrow",Arial,sans-serif';
+    g.fillText(BRAND.name, x+AD_SEG-26, AD_H/2-12);
+    g.fillStyle=BRAND.gold; g.font='bold 23px Arial,sans-serif';
+    g.fillText(BRAND.domain, x+AD_SEG-26, AD_H/2+24);
+  },
+  function nova(g,x){    adFiller(g,x,'NOVA ENERGY','#0b2a7a','#e9ff4a'); },
+  function kestrel(g,x){ adFiller(g,x,'KESTREL AIR','#111318','#ff5252'); },
+  function meridian(g,x){adFiller(g,x,'MERIDIAN BANK','#3a1060','#9fe8ff'); }
+];
+function adFiller(g,x,text,bg,ink){
+  g.fillStyle=bg; g.fillRect(x,0,AD_SEG,AD_H);
+  g.fillStyle='rgba(255,255,255,.06)'; g.fillRect(x,0,AD_SEG,34);
+  g.textAlign='center'; g.textBaseline='middle';
+  g.fillStyle=ink; g.font='bold 54px "Arial Narrow",Arial,sans-serif';
+  g.fillText(text, x+AD_SEG/2, AD_H/2);
+}
+
+let adCanvas = null;
+function paintAds(){
+  if(!adCanvas) adCanvas = cv(AD_SEG*CREATIVES.length, AD_H);
+  const g = adCanvas.getContext('2d');
+  g.clearRect(0,0,adCanvas.width,AD_H);
+  CREATIVES.forEach((fn,i)=>{ g.save(); fn(g, i*AD_SEG); g.restore(); });
+  // LED pitch: a fine dark grid so the strip reads as diodes, not paint
+  g.globalAlpha=.20; g.fillStyle='#000000';
+  for(let x=0;x<adCanvas.width;x+=4) g.fillRect(x,0,1,AD_H);
+  for(let y=0;y<AD_H;y+=4) g.fillRect(0,y,adCanvas.width,1);
+  g.globalAlpha=.12; g.fillStyle='#ffffff'; g.fillRect(0,0,adCanvas.width,2);
+  g.globalAlpha=1;
+  return adCanvas;
+}
+function ledTexture(){
+  const t = tex(paintAds());
+  t.wrapS = THREE.RepeatWrapping; t.repeat.set(2.4,1);
+  return t;
+}
+/* called when the real logo finishes loading */
+function repaintBrand(){
+  paintAds();
+  for(const L of ledTextures) L.t.needsUpdate = true;
+  if(ledMat && ledMat.map) ledMat.map.needsUpdate = true;
+  if(TEX.bigscreen){
+    const fresh = bigscreenTexture();
+    TEX.bigscreen.image = fresh.image; TEX.bigscreen.needsUpdate = true;
+  }
+  if(typeof paintBug === 'function') paintBug();
+}
+
+/* A real goal net is a diamond mesh of twine with visible knots, not a
+   square grid. Rotating the lattice 45° and thickening the crossings is
+   most of the difference when the ball is sitting in it. */
+function netTexture(){
+  const N=256, c = cv(N,N), g = c.getContext('2d');
+  g.clearRect(0,0,N,N);
+  g.strokeStyle='rgba(255,255,255,.88)'; g.lineWidth=2.1; g.lineCap='round';
+  const step=24;
+  for(let i=-N;i<N*2;i+=step){
+    g.beginPath(); g.moveTo(i,0);    g.lineTo(i+N,N); g.stroke();
+    g.beginPath(); g.moveTo(i,N);    g.lineTo(i+N,0); g.stroke();
+  }
+  g.fillStyle='rgba(255,255,255,.95)';                    // knots
+  for(let y=0;y<=N;y+=step) for(let x=(y/step%2)*step/2;x<=N;x+=step){
+    g.beginPath(); g.arc(x,y,1.9,0,7); g.fill();
+  }
+  const t=new THREE.CanvasTexture(c);
+  t.wrapS=t.wrapT=THREE.RepeatWrapping;
+  t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return t;
+}
+
+/* Proper 32-panel ball: twelve pentagons on an icosahedral layout rather
+   than blobs scattered at random, plus stitching and a scuff or two. */
+function ballTexture(){
+  const W=1024,H=512, c = cv(W,H), g = c.getContext('2d');
+  g.fillStyle='#f8fafd'; g.fillRect(0,0,W,H);
+  const poly=(cx,cy,r,n,rot,fill)=>{
+    g.beginPath();
+    for(let k=0;k<n;k++){
+      const a=rot+k/n*Math.PI*2;
+      const x=cx+Math.cos(a)*r, y=cy+Math.sin(a)*r*0.92;
+      k?g.lineTo(x,y):g.moveTo(x,y);
+    }
+    g.closePath(); g.fillStyle=fill; g.fill();
+    g.lineWidth=5; g.strokeStyle='#e2e6ee'; g.stroke();
+  };
+  // two staggered rings of pentagons plus a cap at each pole
+  for(let i=0;i<5;i++){
+    poly(W*(i+0.5)/5, H*0.30, 46, 5, -Math.PI/2, '#1b202a');
+    poly(W*(i+1.0)/5, H*0.70, 46, 5,  Math.PI/2, '#1b202a');
+  }
+  poly(W*0.5, 12, 40, 5, 0, '#1b202a');
+  poly(W*0.5, H-12, 40, 5, Math.PI, '#1b202a');
+  // stitching
+  g.strokeStyle='rgba(150,158,172,.55)'; g.lineWidth=2.4; g.setLineDash([7,9]);
+  for(let i=0;i<5;i++){
+    g.beginPath(); g.arc(W*(i+0.5)/5, H*0.30, 74, 0, 7); g.stroke();
+    g.beginPath(); g.arc(W*(i+1.0)/5, H*0.70, 74, 0, 7); g.stroke();
+  }
+  g.setLineDash([]);
+  // brand flash and a couple of grass scuffs
+  g.save(); g.globalAlpha=.9; g.textAlign='center'; g.textBaseline='middle';
+  g.fillStyle=BRAND.red; g.font='900 34px "Arial Narrow",Arial,sans-serif';
+  g.fillText(BRAND.name, W*0.30, H*0.50); g.fillText(BRAND.name, W*0.80, H*0.50);
+  g.restore();
+  g.globalAlpha=.13; g.fillStyle='#5d7a3a';
+  for(let i=0;i<26;i++) g.fillRect(Math.random()*W, Math.random()*H, 12+Math.random()*40, 5+Math.random()*9);
+  g.globalAlpha=1;
+  return tex(c);
+}
+
+/* The torso is a lathe, so u wraps once around the body: u=0.5 is the
+   middle of his BACK and u=0/1 is the middle of his chest. The number
+   therefore sits at canvas centre, and the chest sponsor is drawn twice —
+   once off each edge — so its two halves meet at the seam. v=0 is the hem
+   and v=1 the collar, so top-of-canvas is the shoulder line. */
+function kitTexture(kit, number, name){
+  const W=512, Hc=256;
+  const c = cv(W,Hc), g = c.getContext('2d');
+  g.fillStyle = kit.shirt; g.fillRect(0,0,W,Hc);
+
+  g.fillStyle = kit.trim;
+  if(kit.pattern==='stripe'){ for(let x=16;x<W;x+=64) g.fillRect(x,0,30,Hc); }
+  else if(kit.pattern==='hoop'){ for(let y=26;y<Hc;y+=46) g.fillRect(0,y,W,20); }
+  else if(kit.pattern==='sash'){
+    g.save(); g.globalAlpha=.92; g.translate(W*0.5,0); g.rotate(-0.46);
+    g.fillRect(-44,-160,64,560); g.restore();
+  } else if(kit.pattern==='pinstripe'){
+    g.globalAlpha=.34; for(let x=8;x<W;x+=26) g.fillRect(x,0,6,Hc); g.globalAlpha=1;
+  }
+
+  // woven fabric grain — kills the plastic look under a strong key light
+  g.globalAlpha=.055;
+  for(let i=0;i<3200;i++){
+    g.fillStyle = Math.random()>.5 ? '#ffffff' : '#000000';
+    g.fillRect(Math.random()*W, Math.random()*Hc, 2, 1);
+  }
+  g.globalAlpha=1;
+
+  // vertical ambient occlusion: shoulders catch the floodlights, hem doesn't
+  const ao = g.createLinearGradient(0,0,0,Hc);
+  ao.addColorStop(0,'rgba(255,255,255,.12)');
+  ao.addColorStop(.45,'rgba(255,255,255,0)');
+  ao.addColorStop(1,'rgba(0,0,0,.34)');
+  g.fillStyle=ao; g.fillRect(0,0,W,Hc);
+
+  g.textAlign='center'; g.textBaseline='middle';
+
+  // chest sponsor, split across the wrap seam so the halves rejoin
+  if(kit.sponsor){
+    g.font='bold 30px "Arial Narrow",Arial,sans-serif';
+    g.fillStyle = kit.sponsorInk || '#ffffff';
+    g.globalAlpha=.95;
+    g.fillText(kit.sponsor, 0, 122); g.fillText(kit.sponsor, W, 122);
+    g.globalAlpha=1;
+  }
+
   if(number != null){
-    g.font='bold 62px Arial'; g.textAlign='center'; g.textBaseline='middle';
-    g.lineWidth=6; g.strokeStyle='rgba(0,0,0,.45)';
-    g.strokeText(String(number),128,62);
-    g.fillStyle = kit.stripe ? '#ffffff' : kit.trim;
-    g.fillText(String(number),128,62);            // u=0.5 lands on the player's back
+    if(name){
+      g.font='bold 26px "Arial Narrow",Arial,sans-serif';
+      g.lineWidth=5; g.strokeStyle='rgba(0,0,0,.5)';
+      g.strokeText(name, W*0.5, 52);
+      g.fillStyle = kit.numberInk || '#ffffff';
+      g.fillText(name, W*0.5, 52);
+    }
+    g.font='900 88px Arial,sans-serif';
+    g.lineWidth=10; g.strokeStyle='rgba(0,0,0,.5)';
+    g.strokeText(String(number), W*0.5, 124);
+    g.fillStyle = kit.numberInk || (kit.pattern==='stripe' ? '#ffffff' : kit.trim);
+    g.fillText(String(number), W*0.5, 124);
   }
+
+  g.fillStyle = kit.trim; g.fillRect(0,0,W,11);            // collar band
+  g.fillStyle = 'rgba(255,255,255,.10)'; g.fillRect(0,11,W,4);
   return tex(c);
 }
 
@@ -391,16 +780,29 @@ function glowTexture(){
 }
 
 function skyTexture(){
-  const c = cv(64,256), g = c.getContext('2d');
-  const grd = g.createLinearGradient(0,0,0,256);
-  grd.addColorStop(0,'#01030a'); grd.addColorStop(.55,'#061027'); grd.addColorStop(.85,'#10254a');
-  grd.addColorStop(1,'#1b3866');
-  g.fillStyle=grd; g.fillRect(0,0,64,256);
-  for(let i=0;i<130;i++){
-    const y=Math.random()*150;
-    g.fillStyle='rgba(255,255,255,'+(0.15+Math.random()*0.5)+')';
-    g.fillRect(Math.random()*64, y, 1, 1);
+  const W=512,H=512, c = cv(W,H), g = c.getContext('2d');
+  const grd = g.createLinearGradient(0,0,0,H);
+  grd.addColorStop(0,'#010206'); grd.addColorStop(.42,'#050c1e');
+  grd.addColorStop(.70,'#0d2044'); grd.addColorStop(.88,'#1d3f70');
+  grd.addColorStop(1,'#2c5a8e');
+  g.fillStyle=grd; g.fillRect(0,0,W,H);
+  for(let i=0;i<900;i++){                                   // stars, thinning downward
+    const y=Math.pow(Math.random(),1.7)*H*0.62;
+    g.fillStyle='rgba(255,255,255,'+(0.10+Math.random()*0.55)+')';
+    const r=Math.random()<.08?1.7:1;
+    g.fillRect(Math.random()*W, y, r, r);
   }
+  // thin cloud lit from beneath by the floodlights — the night-match tell
+  for(let i=0;i<26;i++){
+    const cx=Math.random()*W, cy=H*0.42+Math.random()*H*0.34, r=40+Math.random()*130;
+    const cl=g.createRadialGradient(cx,cy,0,cx,cy,r);
+    cl.addColorStop(0,'rgba(150,178,225,'+(0.05+Math.random()*0.09)+')');
+    cl.addColorStop(1,'rgba(150,178,225,0)');
+    g.fillStyle=cl; g.fillRect(cx-r,cy-r,r*2,r*2);
+  }
+  const halo=g.createLinearGradient(0,H*0.72,0,H);
+  halo.addColorStop(0,'rgba(120,160,220,0)'); halo.addColorStop(1,'rgba(150,190,255,.22)');
+  g.fillStyle=halo; g.fillRect(0,H*0.72,W,H*0.28);
   return tex(c);
 }
 
@@ -408,162 +810,432 @@ function skyTexture(){
 const TEX = {};
 let ledMat = null;
 const flags = [];
+const netPanels = [];        // goal nets, so a finish can ripple them
+const ledTextures = [];      // every scrolling board surface, animated together
 
 function buildWorld(){
-  TEX.crowd = crowdTexture(); TEX.net = netTexture(); TEX.glow = glowTexture();
+  TEX.net = netTexture(); TEX.glow = glowTexture();
+  TEX.bigscreen = bigscreenTexture();
 
-  // sky
-  const sky = new THREE.Mesh(new THREE.SphereGeometry(420, 24, 16),
+  // ---- sky ----
+  const sky = new THREE.Mesh(new THREE.SphereGeometry(460, 32, 20),
     new THREE.MeshBasicMaterial({map:skyTexture(), side:THREE.BackSide, fog:false}));
   scene.add(sky);
 
-  // turf
+  // ---- turf ----
   const M=6;
   const turf = new THREE.Mesh(new THREE.PlaneGeometry(CFG.L+M*2, CFG.W+M*2, 1,1),
     new THREE.MeshStandardMaterial({map:pitchTexture(), normalMap:grassNormal(),
-      normalScale:new THREE.Vector2(.35,.35), roughness:.93, metalness:0}));
+      normalScale:new THREE.Vector2(.42,.42), roughness:.94, metalness:0}));
   turf.rotation.x=-Math.PI/2; turf.receiveShadow=true; scene.add(turf);
 
-  const apron = new THREE.Mesh(new THREE.PlaneGeometry(CFG.L+80, CFG.W+80),
-    new THREE.MeshStandardMaterial({color:0x123018, roughness:1}));
+  const apron = new THREE.Mesh(new THREE.PlaneGeometry(CFG.L+90, CFG.W+90),
+    new THREE.MeshStandardMaterial({color:0x0a1c0f, roughness:1}));
   apron.rotation.x=-Math.PI/2; apron.position.y=-0.03; apron.receiveShadow=true; scene.add(apron);
 
-  // LED boards
+  // ---- LED advertising boards ----
   const ledTex = ledTexture();
-  ledMat = new THREE.MeshBasicMaterial({map:ledTex});
-  const led=(len,x,z,ry)=>{
-    const m=new THREE.Mesh(new THREE.BoxGeometry(len,1.05,.3), ledMat);
-    m.position.set(x,.6,z); m.rotation.y=ry; scene.add(m);
+  ledMat = new THREE.MeshBasicMaterial({map:ledTex, toneMapped:false});
+  const boardBack = new THREE.MeshStandardMaterial({color:0x05070c, roughness:.9});
+  const led=(len,x,z,ry,rep)=>{
+    const t = ledTex.clone(); t.needsUpdate=true;
+    t.wrapS=THREE.RepeatWrapping; t.repeat.set(rep,1);
+    ledTextures.push({t, speed:1});
+    const mat = new THREE.MeshBasicMaterial({map:t, toneMapped:false});
+    const m=new THREE.Mesh(new THREE.BoxGeometry(len,1.15,.34),
+      [boardBack,boardBack,boardBack,boardBack,mat,boardBack]);
+    m.position.set(x,.62,z); m.rotation.y=ry; scene.add(m);
+    // the boards throw their own colour onto the grass in front of them
+    const spill = new THREE.Mesh(new THREE.PlaneGeometry(len,3.4),
+      new THREE.MeshBasicMaterial({color:0x223047, transparent:true, opacity:.14,
+        blending:THREE.AdditiveBlending, depthWrite:false}));
+    spill.rotation.x=-Math.PI/2; spill.rotation.z=ry;
+    spill.position.set(x - Math.sin(ry)*1.9, .02, z - Math.cos(ry)*1.9);
+    scene.add(spill);
+    return {mesh:m, tex:t};
   };
-  led(CFG.L+16, 0, -(HALF_W+5), 0);
-  led(CFG.L+16, 0,  (HALF_W+5), Math.PI);
-  led(CFG.W+6, -(HALF_L+6.5), 0, Math.PI/2);
-  led(CFG.W+6,  (HALF_L+6.5), 0, -Math.PI/2);
+  ledMat.map = ledTex;
+  led(CFG.L+16, 0, -(HALF_W+5), 0, 1.5);
+  led(CFG.L+16, 0,  (HALF_W+5), Math.PI, 1.5);
+  led(CFG.W+8, -(HALF_L+6.5), 0, Math.PI/2, 1.0);
+  led(CFG.W+8,  (HALF_L+6.5), 0, -Math.PI/2, 1.0);
 
-  // stands: two raked tiers, roof, facade
-  function stand(len, dist, ry, px, pz){
+  // ---- stands ----
+  const concrete = new THREE.MeshStandardMaterial({color:0x0b1120, roughness:.92});
+  const steel    = new THREE.MeshStandardMaterial({color:0x161d2e, roughness:.55, metalness:.55});
+  function stand(len, dist, ry, px, pz, homeCol){
     const grp = new THREE.Group();
     grp.position.set(px,0,pz); grp.rotation.y=ry; scene.add(grp);
     const rake = -Math.PI/3, cos=Math.cos(Math.PI/6), sin=Math.sin(Math.PI/6);
     const tier=(slope, baseY, baseZ, rep)=>{
-      const t = TEX.crowd.clone(); t.needsUpdate=true;
-      t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(rep, slope/6);
+      const t = crowdTexture(homeCol);
+      t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(rep, Math.max(0.8,slope/34));
       const m = new THREE.Mesh(new THREE.PlaneGeometry(len, slope),
         new THREE.MeshBasicMaterial({map:t}));
       m.rotation.x = rake;
       m.position.set(0, baseY + slope*sin/2, baseZ - slope*cos/2);
       grp.add(m);
-      return {top:baseY+slope*sin, back:baseZ-slope*cos};
+      return {top:baseY+slope*sin, back:baseZ-slope*cos, mat:m.material};
     };
-    const lower = tier(17, 1.6, -dist, Math.round(len/9));
-    const upper = tier(20, lower.top+4.5, lower.back-1.5, Math.round(len/9));
-    const facade = new THREE.Mesh(new THREE.BoxGeometry(len+3, 5, 1.2),
-      new THREE.MeshStandardMaterial({color:0x0a1122, roughness:.85}));
-    facade.position.set(0, lower.top+2.2, lower.back-0.6); grp.add(facade);
-    const roof = new THREE.Mesh(new THREE.PlaneGeometry(len+6, Math.abs(upper.back)+6),
-      new THREE.MeshStandardMaterial({color:0x070c17, roughness:.9, side:THREE.DoubleSide}));
-    roof.rotation.x = Math.PI/2 - 0.06;
-    roof.position.set(0, upper.top+4.5, (-dist + upper.back)/2 - 1);
-    grp.add(roof);
-    const wall = new THREE.Mesh(new THREE.BoxGeometry(len+6, upper.top+6, 1),
-      new THREE.MeshStandardMaterial({color:0x060a14, roughness:1}));
-    wall.position.set(0, (upper.top+6)/2, upper.back-2); grp.add(wall);
-  }
-  stand(CFG.L+30, 8.5, 0,        0, -(HALF_W));
-  stand(CFG.L+30, 8.5, Math.PI,  0,  (HALF_W));
-  stand(CFG.W+22, 10, -Math.PI/2,  (HALF_L), 0);
-  stand(CFG.W+22, 10,  Math.PI/2, -(HALF_L), 0);
+    const lower = tier(17, 1.6, -dist, Math.max(2,Math.round(len/46)));
+    const upper = tier(21, lower.top+5.0, lower.back-1.6, Math.max(2,Math.round(len/46)));
 
-  // goals with sagging nets
-  const postMat = new THREE.MeshStandardMaterial({color:0xffffff, roughness:.45, metalness:.1});
-  const netMat = new THREE.MeshBasicMaterial({map:TEX.net, transparent:true, opacity:.45,
-    side:THREE.DoubleSide, depthWrite:false});
+    // pitch-side wall the front row sits behind
+    const wallF = new THREE.Mesh(new THREE.BoxGeometry(len+3, 1.7, .6), concrete);
+    wallF.position.set(0, .85, -dist+.6); grp.add(wallF);
+
+    // the balcony between the tiers, with a lit fascia
+    const facade = new THREE.Mesh(new THREE.BoxGeometry(len+3, 5.2, 1.4), concrete);
+    facade.position.set(0, lower.top+2.4, lower.back-0.7); grp.add(facade);
+    const fascia = new THREE.Mesh(new THREE.PlaneGeometry(len+2, 1.5),
+      new THREE.MeshBasicMaterial({map:ledTex.clone(), toneMapped:false}));
+    fascia.material.map.wrapS=THREE.RepeatWrapping;
+    fascia.material.map.repeat.set(Math.max(2,len/34),1);
+    fascia.material.map.needsUpdate=true;
+    ledTextures.push({t:fascia.material.map, speed:-0.55});   // upper tier runs the other way
+    fascia.position.set(0, lower.top+2.6, lower.back-1.45); grp.add(fascia);
+
+    // roof, trusses and the light bar slung beneath
+    const depth = Math.abs(upper.back)+8;
+    const roof = new THREE.Mesh(new THREE.PlaneGeometry(len+8, depth),
+      new THREE.MeshStandardMaterial({color:0x060a14, roughness:.94, side:THREE.DoubleSide}));
+    roof.rotation.x = Math.PI/2 - 0.07;
+    roof.position.set(0, upper.top+5.0, (-dist + upper.back)/2 - 1);
+    grp.add(roof);
+    for(let i=-3;i<=3;i++){
+      const truss = new THREE.Mesh(new THREE.BoxGeometry(.5, .5, depth), steel);
+      truss.position.set(i*len/7, upper.top+4.7, (-dist+upper.back)/2 - 1);
+      truss.rotation.x = -0.07; grp.add(truss);
+    }
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(len, .5, .8),
+      new THREE.MeshBasicMaterial({color:0xfff6e2, toneMapped:false}));
+    bar.position.set(0, upper.top+3.6, -dist-1.5); grp.add(bar);
+
+    const back = new THREE.Mesh(new THREE.BoxGeometry(len+8, upper.top+8, 1.2), concrete);
+    back.position.set(0, (upper.top+8)/2, upper.back-2.4); grp.add(back);
+    return {top:upper.top, back:upper.back, grp, len};
+  }
+  stand(CFG.L+30, 8.5, 0,         0, -(HALF_W), null);
+  stand(CFG.L+30, 8.5, Math.PI,   0,  (HALF_W), null);
+  const eEnd = stand(CFG.W+22, 10, -Math.PI/2,  (HALF_L), 0, TEAMS[1].chip);
+  stand(CFG.W+22, 10,  Math.PI/2, -(HALF_L), 0, TEAMS[0].chip);
+
+  // ---- big screen on the east end ----
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(17, 9),
+    new THREE.MeshBasicMaterial({map:TEX.bigscreen, toneMapped:false}));
+  screen.position.set(HALF_L+16, 22, 0); screen.rotation.y = -Math.PI/2; scene.add(screen);
+  const bezel = new THREE.Mesh(new THREE.BoxGeometry(.6, 10.2, 18.2), concrete);
+  bezel.position.set(HALF_L+16.4, 22, 0); scene.add(bezel);
+
+  // ---- goals ----
+  const postMat = new THREE.MeshStandardMaterial({color:0xf6f8fc, roughness:.35, metalness:.15});
   for(const s of [-1,1]){
-    const gx=s*HALF_L, hw=CFG.GOAL_W/2, d=2.1;
-    const post=()=>new THREE.Mesh(new THREE.CylinderGeometry(.065,.065,CFG.GOAL_H,12), postMat);
+    const gx=s*HALF_L, hw=CFG.GOAL_W/2, d=2.0, R=.06;
+    const post=()=>new THREE.Mesh(new THREE.CylinderGeometry(R,R,CFG.GOAL_H,14), postMat);
     const p1=post(); p1.position.set(gx,CFG.GOAL_H/2,-hw);
     const p2=post(); p2.position.set(gx,CFG.GOAL_H/2,hw);
-    const bar=new THREE.Mesh(new THREE.CylinderGeometry(.065,.065,CFG.GOAL_W,12), postMat);
+    const bar=new THREE.Mesh(new THREE.CylinderGeometry(R,R,CFG.GOAL_W+R*2,14), postMat);
     bar.rotation.x=Math.PI/2; bar.position.set(gx,CFG.GOAL_H,0);
     [p1,p2,bar].forEach(m=>{m.castShadow=true; scene.add(m);});
-    // back net, sagging away from goal
-    const bg = new THREE.PlaneGeometry(CFG.GOAL_W, CFG.GOAL_H, 12, 8);
-    const pa = bg.attributes.position;
+    // the two rear stanchions the net is hung from
+    for(const t of [-1,1]){
+      const stay=new THREE.Mesh(new THREE.CylinderGeometry(.035,.035,CFG.GOAL_H*1.02,8), postMat);
+      stay.position.set(gx+s*d, CFG.GOAL_H*0.5, t*hw);
+      stay.rotation.x = 0; scene.add(stay);
+    }
+    // net: a real material, doubled-sided, with slack modelled into the mesh
+    const mkNet = (w,h,segW,segH)=>{
+      const geo = new THREE.PlaneGeometry(w,h,segW,segH);
+      const t = TEX.net.clone(); t.needsUpdate=true;
+      t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(w*1.5, h*1.5);
+      const mat = new THREE.MeshLambertMaterial({map:t, transparent:true, opacity:.62,
+        side:THREE.DoubleSide, depthWrite:false, alphaTest:.04});
+      return new THREE.Mesh(geo, mat);
+    };
+    const back = mkNet(CFG.GOAL_W, CFG.GOAL_H, 14, 10);
+    const pa = back.geometry.attributes.position;
+    const rest = [];
     for(let i=0;i<pa.count;i++){
       const u=(pa.getX(i)/CFG.GOAL_W)+.5, v=(pa.getY(i)/CFG.GOAL_H)+.5;
-      pa.setZ(i, -Math.sin(u*Math.PI)*Math.sin(v*Math.PI)*0.55);
+      const z = -Math.sin(u*Math.PI)*Math.sin(v*Math.PI*0.9)*0.62;   // slack bag
+      pa.setZ(i,z); rest.push(z);
     }
-    bg.computeVertexNormals();
-    const back = new THREE.Mesh(bg, netMat);
+    back.geometry.computeVertexNormals();
     back.position.set(gx+s*d, CFG.GOAL_H/2, 0); back.rotation.y = s>0?-Math.PI/2:Math.PI/2;
     scene.add(back);
+    netPanels.push({mesh:back, rest, side:s, t:0});
     for(const t of [-1,1]){
-      const side=new THREE.Mesh(new THREE.PlaneGeometry(d,CFG.GOAL_H), netMat);
-      side.position.set(gx+s*d/2,CFG.GOAL_H/2,t*hw); scene.add(side);
+      const side=mkNet(d,CFG.GOAL_H,4,6);
+      side.position.set(gx+s*d/2,CFG.GOAL_H/2,t*hw);
+      side.rotation.y = 0; scene.add(side);
     }
-    const top=new THREE.Mesh(new THREE.PlaneGeometry(CFG.GOAL_W,d), netMat);
-    top.rotation.x=-Math.PI/2; top.position.set(gx+s*d/2,CFG.GOAL_H,0); scene.add(top);
+    const top=mkNet(CFG.GOAL_W,d,10,4);
+    top.rotation.x=-Math.PI/2; top.position.set(gx+s*d/2,CFG.GOAL_H-0.03,0); scene.add(top);
   }
 
-  // corner flags
+  // ---- corner flags ----
   for(const sx of [-1,1]) for(const sz of [-1,1]){
-    const pole=new THREE.Mesh(new THREE.CylinderGeometry(.03,.03,1.5,6),
+    const pole=new THREE.Mesh(new THREE.CylinderGeometry(.028,.028,1.5,6),
       new THREE.MeshStandardMaterial({color:0xf0f0f0, roughness:.6}));
-    pole.position.set(sx*HALF_L, .75, sz*HALF_W); scene.add(pole);
-    const flag=new THREE.Mesh(new THREE.PlaneGeometry(.42,.3),
+    pole.position.set(sx*HALF_L, .75, sz*HALF_W); pole.castShadow=true; scene.add(pole);
+    const flag=new THREE.Mesh(new THREE.PlaneGeometry(.44,.32,4,2),
       new THREE.MeshStandardMaterial({color:0xe9ff4a, side:THREE.DoubleSide, roughness:.8}));
-    flag.position.set(sx*(HALF_L-.2), 1.35, sz*HALF_W); scene.add(flag);
+    flag.position.set(sx*(HALF_L-.21), 1.34, sz*HALF_W); flag.castShadow=true; scene.add(flag);
     flags.push(flag);
   }
 
-  // dugouts on the far side
+  /* ---- technical area ----
+     A dugout is a shelter, not a block: a back wall, two returns, a
+     smoked-perspex roof cantilevered over an OPEN front, and a row of
+     seats you can see substitutes sitting in. It also sits BEHIND the
+     advertising boards, which is where the real ones are — in front of
+     them it read as a slab parked on the touchline. */
+  const DUG_Z = HALF_W + 7.4;
   for(const sx of [-1,1]){
-    const box=new THREE.Mesh(new THREE.BoxGeometry(9,2.2,3),
-      new THREE.MeshStandardMaterial({color:0x0b1020, roughness:.7}));
-    box.position.set(sx*13, 1.1, HALF_W+3.4); scene.add(box);
-    const glass=new THREE.Mesh(new THREE.BoxGeometry(8.6,1.2,.1),
-      new THREE.MeshStandardMaterial({color:0x2a4a7a, roughness:.2, metalness:.6,
-        transparent:true, opacity:.55}));
-    glass.position.set(sx*13, 1.5, HALF_W+2); scene.add(glass);
+    const team  = sx<0 ? 0 : 1;
+    const grp = new THREE.Group(); grp.position.set(sx*15, 0, DUG_Z); scene.add(grp);
+    const wallMat = new THREE.MeshStandardMaterial({color:0x0d1424, roughness:.88});
+    const backW = new THREE.Mesh(new THREE.BoxGeometry(10.4,2.5,.3), wallMat);
+    backW.position.set(0,1.25,1.5); backW.castShadow=true; grp.add(backW);
+    for(const e of [-1,1]){
+      const endW = new THREE.Mesh(new THREE.BoxGeometry(.3,2.5,3.0), wallMat);
+      endW.position.set(e*5.05,1.25,0); endW.castShadow=true; grp.add(endW);
+    }
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(10.8,.16,3.4),
+      new THREE.MeshStandardMaterial({color:0x0b1220, roughness:.42, metalness:.25,
+        transparent:true, opacity:.62}));
+    roof.position.set(0,2.62,0.1); roof.rotation.x = -0.05; roof.castShadow=true; grp.add(roof);
+    const trim = new THREE.Mesh(new THREE.BoxGeometry(10.8,.34,.18),
+      new THREE.MeshStandardMaterial({color:team? TEAMS[1].chip : TEAMS[0].chip, roughness:.6}));
+    trim.position.set(0,2.44,-1.6); grp.add(trim);
+    const floor = new THREE.Mesh(new THREE.BoxGeometry(10.4,.12,3.2),
+      new THREE.MeshStandardMaterial({color:0x151a22, roughness:.95}));
+    floor.position.set(0,.06,0); floor.receiveShadow=true; grp.add(floor);
+
+    // seats, and men sitting in them
+    const seatMat = new THREE.MeshStandardMaterial({color:TEAMS[team].chip, roughness:.66});
+    const track = {shirt:TEAMS[team].shirt, trim:TEAMS[team].trim, shorts:'#14171d',
+                   socks:TEAMS[team].shirt, sleeve:TEAMS[team].sleeve, pattern:'none',
+                   numberInk:'#ffffff'};
+    for(let i=0;i<7;i++){
+      const x = -3.9 + i*1.30;
+      const pan  = new THREE.Mesh(new THREE.BoxGeometry(.60,.10,.56), seatMat);
+      pan.position.set(x,.52,0.15); grp.add(pan);
+      const rest = new THREE.Mesh(new THREE.BoxGeometry(.60,.62,.10), seatMat);
+      rest.position.set(x,.82,0.45); rest.rotation.x = -0.16; grp.add(rest);
+      if(i===3) continue;                                   // leave a gap in the row
+      const ph = physique('M');
+      const sub = buildBody(track, null, {
+        simple:true, height:ph.h, build:ph.build,
+        skin:SKIN[(Math.random()*SKIN.length)|0], hair:HAIR[(Math.random()*HAIR.length)|0],
+        hairStyle:(Math.random()*7)|0, boot:BOOTS[(Math.random()*BOOTS.length)|0]
+      });
+      seatPose(sub, 0.12 + Math.random()*0.10);
+      sub.group.position.set(x, 0.12, 0.16);
+      sub.group.rotation.y = Math.PI + (Math.random()-.5)*0.35;   // facing the pitch
+      grp.add(sub.group);
+    }
+    // the manager, on his feet in front of the shelter
+    const coat = {shirt:'#15181f', trim:'#2b303c', shorts:'#15181f', socks:'#15181f',
+                  sleeve:'#15181f', pattern:'none', numberInk:'#2b303c'};
+    const mh = physique('M');
+    const boss = buildBody(coat, null, {
+      simple:true, height:mh.h, build:mh.build*1.10,
+      skin:SKIN[(Math.random()*SKIN.length)|0], hair:HAIR[(Math.random()*HAIR.length)|0],
+      hairStyle:[1,4,0][(Math.random()*3)|0], boot:0x0a0a0c
+    });
+    standPose(boss);
+    boss.group.position.set(sx*1.4, 0, -2.6);
+    boss.group.rotation.y = Math.PI - sx*0.25;
+    grp.add(boss.group);
   }
 
-  // floodlights
+  // ---- broadcast cameras on the near touchline ----
+  for(const cx of [-24, 0, 26]){
+    const tri = new THREE.Mesh(new THREE.CylinderGeometry(.05,.34,1.5,6),
+      new THREE.MeshStandardMaterial({color:0x1a1f2b, roughness:.7}));
+    tri.position.set(cx, .75, -(HALF_W+7.5)); scene.add(tri);
+    const cam = new THREE.Mesh(new THREE.BoxGeometry(.5,.42,1.0),
+      new THREE.MeshStandardMaterial({color:0x0d1017, roughness:.5, metalness:.3}));
+    cam.position.set(cx, 1.62, -(HALF_W+7.5)); cam.rotation.x = 0.14; scene.add(cam);
+    const lens = new THREE.Mesh(new THREE.CylinderGeometry(.16,.16,.5,10),
+      new THREE.MeshStandardMaterial({color:0x05070a, roughness:.3, metalness:.5}));
+    lens.rotation.x = Math.PI/2 - 0.14; lens.position.set(cx, 1.60, -(HALF_W+6.9)); scene.add(lens);
+  }
+
+  // ---- floodlight pylons ----
   for(const sx of [-1,1]) for(const sz of [-1,1]){
-    const pole=new THREE.Mesh(new THREE.CylinderGeometry(.55,.9,40,8),
-      new THREE.MeshStandardMaterial({color:0x141b2e, roughness:.8}));
-    pole.position.set(sx*(HALF_L+22), 20, sz*(HALF_W+20)); scene.add(pole);
-    const rig=new THREE.Mesh(new THREE.BoxGeometry(9,5,.8),
-      new THREE.MeshBasicMaterial({color:0xfdf8e8}));
-    rig.position.set(sx*(HALF_L+22), 40, sz*(HALF_W+20));
-    rig.lookAt(0,0,0); scene.add(rig);
+    const X = sx*(HALF_L+22), Z = sz*(HALF_W+20);
+    const pole=new THREE.Mesh(new THREE.CylinderGeometry(.5,1.0,42,10),
+      new THREE.MeshStandardMaterial({color:0x121828, roughness:.85}));
+    pole.position.set(X, 21, Z); scene.add(pole);
+    for(let i=0;i<4;i++){                                  // lattice bracing
+      const br=new THREE.Mesh(new THREE.BoxGeometry(.16,10,.16),
+        new THREE.MeshStandardMaterial({color:0x1a2233, roughness:.8}));
+      br.position.set(X, 8+i*9, Z); br.rotation.z = i%2?0.16:-0.16; scene.add(br);
+    }
+    const rigGrp = new THREE.Group(); rigGrp.position.set(X, 43, Z); scene.add(rigGrp);
+    rigGrp.lookAt(0,0,0);
+    const frame=new THREE.Mesh(new THREE.BoxGeometry(11,6,.5),
+      new THREE.MeshStandardMaterial({color:0x0c1220, roughness:.8}));
+    rigGrp.add(frame);
+    const lampMat = new THREE.MeshBasicMaterial({color:0xfffaf0, toneMapped:false});
+    for(let r=0;r<3;r++) for(let ccol=0;ccol<6;ccol++){     // the individual lamps
+      const lamp=new THREE.Mesh(new THREE.CircleGeometry(.62,10), lampMat);
+      lamp.position.set(-4.6+ccol*1.85, 1.9-r*1.9, .3); rigGrp.add(lamp);
+    }
     const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:TEX.glow,
-      blending:THREE.AdditiveBlending, depthWrite:false, transparent:true, opacity:.85}));
-    sp.scale.set(30,30,1); sp.position.copy(rig.position); scene.add(sp);
+      blending:THREE.AdditiveBlending, depthWrite:false, transparent:true, opacity:.8}));
+    sp.scale.set(42,42,1); sp.position.set(X,43,Z); scene.add(sp);
   }
 
-  // lighting
-  scene.add(new THREE.HemisphereLight(0x8fb0ff, 0x16351c, 0.55));
-  const key = new THREE.DirectionalLight(0xfff4e0, 1.5);
+  // ---- lighting ----
+  scene.add(new THREE.HemisphereLight(0x7d9ce0, 0x0e2413, 0.26));
+  const key = new THREE.DirectionalLight(0xfff4e2, 1.30);
   key.position.set(45,80,30); key.castShadow=true;
   key.shadow.mapSize.set(2048,2048);
   const c=key.shadow.camera;
-  c.left=-38; c.right=38; c.top=38; c.bottom=-38; c.near=1; c.far=220;
-  c.updateProjectionMatrix(); key.shadow.bias=-0.0009; key.shadow.normalBias=0.02;
+  c.left=-40; c.right=40; c.top=40; c.bottom=-40; c.near=1; c.far=230;
+  c.updateProjectionMatrix(); key.shadow.bias=-0.0008; key.shadow.normalBias=0.022;
   scene.add(key); scene.add(key.target);
-  const fill = new THREE.DirectionalLight(0xbdd4ff, 0.55);
-  fill.position.set(-50,60,-40); scene.add(fill);
+  // three floodlit fills from the other corners: crossed shadows, no black side
+  const fillA = new THREE.DirectionalLight(0xb9d0ff, 0.30); fillA.position.set(-60,64,-44); scene.add(fillA);
+  const fillB = new THREE.DirectionalLight(0xaec6ff, 0.20); fillB.position.set(52,58,-52); scene.add(fillB);
+  const fillC = new THREE.DirectionalLight(0xc9dcff, 0.16); fillC.position.set(-48,60,54);  scene.add(fillC);
   for(const sx of [-1,1]) for(const sz of [-1,1]){
-    const p=new THREE.PointLight(0xdce8ff, .5, 210, 2);
-    p.position.set(sx*(HALF_L+16), 36, sz*(HALF_W+14)); scene.add(p);
+    const p=new THREE.PointLight(0xcfe0ff, .26, 230, 2);
+    p.position.set(sx*(HALF_L+16), 38, sz*(HALF_W+14)); scene.add(p);
   }
   return {key};
 }
-const LIGHTS = buildWorld();
+
+/* ---- camera flashes in the stands ----
+   Thirty thousand phones going off at random is the single cheapest cue
+   that a night crowd is alive rather than wallpapered on. One Points
+   object, one additive material, no per-flash draw calls. */
+const FLASH = (function(){
+  const N=70, pos=new Float32Array(N*3), alpha=new Float32Array(N);
+  const home=[], life=[];
+  for(let i=0;i<N;i++){
+    // scatter them through the four banks of seating
+    const edge = (Math.random()<0.62);
+    const x = edge ? (Math.random()-.5)*(CFG.L+30) : (Math.random()<.5?-1:1)*(HALF_L+11+Math.random()*16);
+    const z = edge ? (Math.random()<.5?-1:1)*(HALF_W+10+Math.random()*22) : (Math.random()-.5)*(CFG.W+18);
+    const y = 4 + Math.random()*22;
+    home.push([x,y,z]); life.push(-Math.random()*9);
+    pos[i*3]=x; pos[i*3+1]=y; pos[i*3+2]=z; alpha[i]=0;
+  }
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos,3));
+  geo.setAttribute('alpha', new THREE.BufferAttribute(alpha,1));
+  const mat=new THREE.PointsMaterial({color:0xffffff, size:1.5, transparent:true,
+    opacity:.9, depthWrite:false, blending:THREE.AdditiveBlending, sizeAttenuation:true});
+  const pts=new THREE.Points(geo,mat); pts.frustumCulled=false; scene.add(pts);
+  return { step(dt, excite){
+    let any=false;
+    for(let i=0;i<N;i++){
+      life[i] -= dt;
+      if(life[i] <= 0){
+        // fire, then wait a random interval — shorter when something happened
+        life[i] = 0.10 + Math.random()*(excite ? 0.55 : 3.4);
+        pos[i*3+1] = home[i][1];
+        any = true;
+      }
+      // a flash is only visible for the first fraction of its interval
+      const on = life[i] > 0 && life[i] < 0.085;
+      pos[i*3+1] = on ? home[i][1] : -900;      // park the dead ones below the world
+      if(on) any = true;
+    }
+    if(any) geo.attributes.position.needsUpdate = true;
+  }};
+})();
+
+/* ---- turf spray: one pooled sprite cloud, reused for every slide ---- */
+const SPRAY = (function(){
+  const N=44, geo=new THREE.BufferGeometry();
+  const pos=new Float32Array(N*3);
+  geo.setAttribute('position', new THREE.BufferAttribute(pos,3));
+  const mat=new THREE.PointsMaterial({color:0x8fbf5e, size:.19, transparent:true,
+    opacity:0, depthWrite:false, sizeAttenuation:true});
+  const pts=new THREE.Points(geo,mat); pts.frustumCulled=false; scene.add(pts);
+  const vel=[]; for(let i=0;i<N;i++) vel.push(new THREE.Vector3());
+  let life=0;
+  return {
+    burst(x,z,dx,dz){
+      for(let i=0;i<N;i++){
+        pos[i*3]=x+(Math.random()-.5)*.4; pos[i*3+1]=.05; pos[i*3+2]=z+(Math.random()-.5)*.4;
+        vel[i].set(dx*(.4+Math.random()*.8)+(Math.random()-.5)*2.2,
+                   1.1+Math.random()*2.4,
+                   dz*(.4+Math.random()*.8)+(Math.random()-.5)*2.2);
+      }
+      life=.55; mat.opacity=.85; geo.attributes.position.needsUpdate=true;
+    },
+    step(dt){
+      if(life<=0) return;
+      life-=dt; mat.opacity=Math.max(0,life/.55)*.85;
+      for(let i=0;i<N;i++){
+        vel[i].y-=11*dt;
+        pos[i*3]+=vel[i].x*dt; pos[i*3+1]=Math.max(.02,pos[i*3+1]+vel[i].y*dt); pos[i*3+2]+=vel[i].z*dt;
+      }
+      geo.attributes.position.needsUpdate=true;
+    }
+  };
+})();
+
+/* ---- net ripple ----
+   A still net makes a goal look like the ball went through a wall. Kick
+   the struck panel with a decaying radial wave and let it settle back to
+   the slack it was built with. The back panel is yawed 90°, so its local
+   x runs along world z — with the sign flipping between the two ends. */
+function rippleNet(side, worldZ, worldY){
+  for(const n of netPanels){
+    if(n.side !== side) continue;
+    n.t = 1; n.hitX = side>0 ? worldZ : -worldZ; n.hitY = worldY - CFG.GOAL_H/2;
+  }
+}
+function stepNets(dt){
+  for(const n of netPanels){
+    if(n.t <= 0) continue;
+    const was = n.t;
+    n.t = Math.max(0, n.t - dt*1.45);
+    const pa = n.mesh.geometry.attributes.position, decay = n.t*n.t;
+    for(let i=0;i<pa.count;i++){
+      const d = Math.hypot(pa.getX(i)-n.hitX, pa.getY(i)-n.hitY);
+      const w = Math.sin(d*3.0 - (1-n.t)*14) * Math.exp(-d*0.8);
+      pa.setZ(i, n.rest[i] - w*0.60*decay);
+    }
+    if(n.t<=0 && was>0) for(let i=0;i<pa.count;i++) pa.setZ(i, n.rest[i]);
+    pa.needsUpdate = true;
+    n.mesh.geometry.computeVertexNormals();
+  }
+}
 
 /* ================== ball ================== */
-const ballMesh = new THREE.Mesh(new THREE.SphereGeometry(CFG.BALL_R, 22, 16),
-  new THREE.MeshStandardMaterial({map:ballTexture(), roughness:.38, metalness:.02}));
+/* A match ball is the one object the eye must never lose. It gets a lift
+   of self-illumination so it stays legible against dark turf at the far
+   end of a 105m pitch, without turning into a glowing bauble up close. */
+const ballMesh = new THREE.Mesh(new THREE.SphereGeometry(CFG.BALL_R, 32, 24),
+  new THREE.MeshStandardMaterial({map:ballTexture(), roughness:.34, metalness:.03,
+    emissive:0x8a97ad, emissiveIntensity:.30}));
 ballMesh.castShadow = true; scene.add(ballMesh);
+
+/* A contact shadow under the ball. The cast shadow alone leaves it
+   ambiguous how high a lofted ball actually is; a blob that shrinks and
+   fades with altitude reads instantly. */
+function blobTexture(){
+  const c = cv(128,128), g = c.getContext('2d');
+  const gr = g.createRadialGradient(64,64,0,64,64,64);
+  gr.addColorStop(0,'rgba(0,0,0,.62)'); gr.addColorStop(.55,'rgba(0,0,0,.28)');
+  gr.addColorStop(1,'rgba(0,0,0,0)');
+  g.fillStyle=gr; g.fillRect(0,0,128,128);
+  return new THREE.CanvasTexture(c);
+}
+const BLOB_TEX = blobTexture();
+const ballBlob = new THREE.Mesh(new THREE.PlaneGeometry(.62,.62),
+  new THREE.MeshBasicMaterial({map:BLOB_TEX, transparent:true, depthWrite:false, opacity:.8}));
+ballBlob.rotation.x = -Math.PI/2; ballBlob.position.y = .015; scene.add(ballBlob);
+
+const BALL_AXIS = new THREE.Vector3(), BALL_UP = new THREE.Vector3(0,1,0), BALL_Q = new THREE.Quaternion();
 
 const ball = { pos:new THREE.Vector3(0,CFG.BALL_R,0), vel:new THREE.Vector3(),
   spin:0, owner:null, cool:0 };
@@ -618,76 +1290,328 @@ function stepBall(dt){
     }
   }
   ballMesh.position.copy(ball.pos);
-  ballMesh.rotation.x += ball.vel.z*dt*3.2;
-  ballMesh.rotation.z -= ball.vel.x*dt*3.2;
+  /* Roll about the axis perpendicular to travel, at the rate the contact
+     patch demands (v = ωr). The old two-axis nudge span the ball about
+     the wrong axis on any diagonal pass, which read as a wobble. */
+  const gs = Math.hypot(ball.vel.x, ball.vel.z);
+  if(gs > .02){
+    BALL_AXIS.set(ball.vel.z, 0, -ball.vel.x).normalize();
+    BALL_Q.setFromAxisAngle(BALL_AXIS, (gs/CFG.BALL_R)*dt);
+    ballMesh.quaternion.premultiply(BALL_Q);
+  }
+  if(Math.abs(ball.spin) > .01){
+    BALL_Q.setFromAxisAngle(BALL_UP, -ball.spin*dt*2.2);
+    ballMesh.quaternion.premultiply(BALL_Q);
+  }
+  const alt = Math.max(0, ball.pos.y - CFG.BALL_R);
+  ballBlob.position.set(ball.pos.x, .015, ball.pos.z);
+  const k = 1/(1+alt*0.42);
+  ballBlob.scale.setScalar(THREE.MathUtils.clamp(k*1.05, .45, 1.15));
+  ballBlob.material.opacity = .78*k;
 }
 
-/* ================== player models ================== */
-const SKIN = [0xd9a06e, 0xa8683c, 0xf0c9a0, 0x6b4326, 0x8d5a34, 0xc98b5e];
-const HAIR = [0x1a1410, 0x2e2018, 0x0d0b0a, 0x5b3a1e, 0x8a6b3a, 0x241c18];
+/* ================== player models ======================================
+   JOINT CONVENTION — read this before touching a pose.
+
+   Every figure is yawed so that its LOCAL +Z is the direction it faces.
+   In that frame, a positive rotation.x applied to a bone that hangs
+   downward swings that bone BACKWARD. So the human rules are:
+
+       knee    rotation.x >= 0 ALWAYS   (a knee only folds backwards)
+       elbow   rotation.x <= 0 ALWAYS   (an elbow only folds forwards)
+       hip     negative reaches the leg forward, positive drives it back
+       ankle   positive is toes-down (push-off), negative is toes-up
+
+   The previous rig drove knees and elbows with the SAME sign, which is
+   why every leg on the pitch hinged the wrong way. buildBody() below and
+   every pose in animate() obey the four rules above, and the knee/elbow
+   values are built from terms that cannot go negative rather than from a
+   sine that swings through zero.
+
+   PROPORTIONS are canonical fractions of standing height, so a 2.01m
+   keeper and a 1.68m winger are one rig at two scales — limbs stay in
+   step with the ground instead of a single mesh being stretched.
+   ====================================================================== */
+
+const PROP = {
+  hip:      0.530,   // hip joint above the sole
+  thigh:    0.245,   // hip -> knee
+  shin:     0.246,   // knee -> ankle  (leaves the ankle at 0.039H)
+  torso:    0.290,   // hip joint -> shoulder joint
+  neck:     0.052,
+  headR:    0.072,
+  shoulder: 0.105,   // half-width of the shoulder line
+  upperArm: 0.172,
+  foreArm:  0.157,
+  foot:     0.150
+};
+
+/* Height and weight spreads measured off the 3,242 real players carried
+   in the manager game's squad data, split by position group. Feeding a
+   squad from these is what stops twenty-two identical men lining up. */
+const ANTHRO = {
+  GK:{h:190.1, hsd:5.1, w:80.1, wsd:7.4},
+  D: {h:184.6, hsd:6.4, w:75.6, wsd:7.1},
+  M: {h:179.8, hsd:5.7, w:71.4, wsd:6.1},
+  F: {h:181.4, hsd:6.5, w:73.4, wsd:6.7}
+};
+const ROLE_GROUP = {GK:'GK',LB:'D',CB:'D',RB:'D',DM:'M',CM:'M',LW:'F',ST:'F',RW:'F'};
+
+const SKIN  = [0xf3cbaa,0xe8b892,0xdfa77f,0xcd9068,0xb0774f,0x96603c,0x7b4b31,0x62381f,0x4a2a17];
+const HAIR  = [0x14100e,0x1d1712,0x2b1c14,0x3d2a1a,0x5a3d22,0x7b5a2e,0xa8834a,0xc9a86a,0x2a2622];
+const BOOTS = [0x101014,0x101014,0x0d0d12,0x1a1a20,0xf2f4f8,0xf2f4f8,0xe8ecf2,
+               0xc9a227,0xe9ff4a,0xff3b6b,0x1e6cff,0x00d9a3];
+
+/* Arm 0 hangs at local -X and arm 1 at +X, and a positive rotation.z
+   swings a hanging bone toward +X. OUT(i) is therefore the sign that
+   takes arm i AWAY from the body — get it backwards and the player
+   folds his arms across his chest instead of spreading them. */
+const OUT = i => (i ? 1 : -1);
+
 const geoCache = {};
 function G(key, make){ return geoCache[key] || (geoCache[key] = make()); }
 
+/* ~N(0,1) from four uniforms — cheap, no logs, and the tails stay sane */
+function gauss(){ return (Math.random()+Math.random()+Math.random()+Math.random()-2)*1.7320508; }
+
+function physique(role){
+  const a = ANTHRO[ROLE_GROUP[role]||'M'];
+  const h = THREE.MathUtils.clamp(a.h + gauss()*a.hsd, 166, 203)/100;
+  const w = THREE.MathUtils.clamp(a.w + gauss()*a.wsd, 58, 104);
+  const bmi = w/(h*h);
+  return {h, w, build: THREE.MathUtils.clamp(1 + (bmi-22.4)*0.030, 0.86, 1.15)};
+}
+
+/* A tapered capsule whose origin sits at its TOP, hanging to y = -len.
+   Bone pivots can then be parented directly with no half-length offset,
+   which is what keeps a chain of three joints from drifting apart. */
+function limbGeo(rTop, rBot, len, seg){
+  len = Math.max(len, (rTop+rBot)*1.06);
+  const pts = [], C = 4;
+  for(let i=0;i<=C;i++){
+    const a = -Math.PI/2 + (i/C)*(Math.PI/2);
+    pts.push(new THREE.Vector2(Math.max(1e-4, Math.cos(a)*rBot), -len + rBot + Math.sin(a)*rBot));
+  }
+  for(let i=0;i<=C;i++){
+    const a = (i/C)*(Math.PI/2);
+    pts.push(new THREE.Vector2(Math.max(1e-4, Math.cos(a)*rTop), -rTop + Math.sin(a)*rTop));
+  }
+  return new THREE.LatheGeometry(pts, seg||12);
+}
+
+/* Torso as a lathe: wide at the shoulders, pinched at the waist, flared
+   again over the chest. A pill-shaped body reads as a pill no matter how
+   well it is animated — the shoulder line is what makes it read as a man. */
+function torsoGeo(H, build){
+  const len = H*PROP.torso, r = H*0.092*build;    // narrower than the shoulder line,
+  const prof = [[0.66,0.00],[0.94,0.10],[0.97,0.26],[0.88,0.45],[0.95,0.64],[1.00,0.82],[0.86,0.94],[0.46,1.00]];
+  return new THREE.LatheGeometry(prof.map(q=>new THREE.Vector2(Math.max(1e-4,q[0]*r), q[1]*len)), 18);
+}                                                 // so the deltoids read as shoulders
+
+/* An extruded side profile beats a box: a boot has a heel, an instep and
+   a toe, and those three silhouettes are what sell a planted foot. */
+function bootGeo(len, w, h){
+  const s = new THREE.Shape();
+  s.moveTo(-len*0.30, 0);
+  s.lineTo( len*0.58, 0);
+  s.quadraticCurveTo(len*0.70, h*0.10, len*0.60, h*0.62);
+  s.quadraticCurveTo(len*0.30, h*0.92, len*0.06, h*1.05);
+  s.lineTo(-len*0.15, h*1.70);
+  s.quadraticCurveTo(-len*0.34, h*1.62, -len*0.30, 0);
+  const g = new THREE.ExtrudeGeometry(s, {depth:w, bevelEnabled:true, bevelSize:h*0.15,
+    bevelThickness:h*0.15, bevelSegments:2, curveSegments:5});
+  g.rotateY(-Math.PI/2);      // shape +X becomes local +Z (forward)
+  g.translate(w/2, 0, 0);     // extrusion ran to -X; recentre it
+  return g;
+}
+
+/* Seven heads of hair. At broadcast distance the silhouette above the
+   ears is most of what tells two players apart once kit is shared. */
+function addHair(parent, style, R, hairMat, trimMat){
+  const made = [];
+  const put = (geo, mat, y, sc, z)=>{
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(0, y, z||0);
+    if(sc) m.scale.set(sc[0],sc[1],sc[2]);
+    m.rotation.x = -0.20;          // hairline sits higher at the front
+    parent.add(m); made.push(m); return m;
+  };
+  const cap = (r, sweep)=>new THREE.SphereGeometry(r, 14, 10, 0, Math.PI*2, 0, Math.PI*sweep);
+  switch(style){
+    case 0: put(cap(R*1.03,0.58), hairMat, R*0.09, [1.00,0.80,1.02]); break;               // crop
+    case 1: put(cap(R*1.00,0.70), hairMat, R*0.05, [1.00,0.56,1.02]); break;               // buzz
+    case 2: put(new THREE.SphereGeometry(R*1.15,14,12), hairMat, R*0.16, [1,0.92,1]); break; // afro
+    case 3: put(cap(R*1.04,0.60), hairMat, R*0.09, [1.00,0.84,1.02]);                      // long
+            put(new THREE.SphereGeometry(R*0.56,10,8), hairMat, -R*0.24, [1.02,1.20,0.62], -R*0.50); break;
+    case 4: break;                                                                          // shaved
+    case 5: put(cap(R*1.02,0.56), hairMat, R*0.09, [1.00,0.78,1.02]);                       // headband
+            { const b=new THREE.Mesh(new THREE.TorusGeometry(R*1.00, R*0.062, 6, 16), trimMat);
+              b.rotation.x = Math.PI/2; b.position.y = R*0.14; parent.add(b); made.push(b); } break;
+    default:put(cap(R*1.02,0.58), hairMat, R*0.09, [1.00,0.80,1.02]);                       // topknot
+            put(new THREE.SphereGeometry(R*0.26,8,7), hairMat, R*0.74, [1,0.9,1], -R*0.22);
+  }
+  return made;
+}
+
 function buildBody(kit, number, opts){
   opts = opts || {};
-  const g = new THREE.Group();
-  const skinMat = new THREE.MeshStandardMaterial({color:SKIN[(Math.random()*SKIN.length)|0], roughness:.75});
-  const shirtMat = new THREE.MeshStandardMaterial({map:kitTexture(kit, number), roughness:.72});
-  const sleeveMat= new THREE.MeshStandardMaterial({color:kit.trim, roughness:.72});
-  const shortMat = new THREE.MeshStandardMaterial({color:kit.shorts, roughness:.7});
-  const sockMat  = new THREE.MeshStandardMaterial({color:kit.socks, roughness:.75});
-  const bootMat  = new THREE.MeshStandardMaterial({color:opts.boot||0x101014, roughness:.35, metalness:.15});
-  const hairMat  = new THREE.MeshStandardMaterial({color:HAIR[(Math.random()*HAIR.length)|0], roughness:.9});
+  const H     = opts.height || 1.82;
+  const build = opts.build  || 1;
+  // geometry cache buckets: 2cm of height, 0.05 of build — ~20 real variants
+  const key = (Math.round(H*50)/50)+'_'+(Math.round(build*20)/20)+'_'+(opts.gloves?'g':'o');
+
+  const g    = new THREE.Group();
+  const lean = new THREE.Group();  g.add(lean);   // dive / slide tilt in body space
+  const root = new THREE.Group();  lean.add(root);
+  root.position.y = H*PROP.hip;
+
+  const skinMat  = new THREE.MeshStandardMaterial({color:opts.skin!=null?opts.skin:SKIN[(Math.random()*SKIN.length)|0], roughness:.78});
+  const hairMat  = new THREE.MeshStandardMaterial({color:opts.hair!=null?opts.hair:HAIR[(Math.random()*HAIR.length)|0], roughness:.95});
+  const shirtMat = new THREE.MeshStandardMaterial({map:kitTexture(kit, number, opts.name), roughness:.66, metalness:.02});
+  const sleeveMat= new THREE.MeshStandardMaterial({color:kit.sleeve||kit.trim, roughness:.68});
+  const shortMat = new THREE.MeshStandardMaterial({color:kit.shorts, roughness:.66});
+  const sockMat  = new THREE.MeshStandardMaterial({color:kit.socks,  roughness:.86});
+  const trimMat  = new THREE.MeshStandardMaterial({color:kit.trim,   roughness:.66});
+  const bootMat  = new THREE.MeshStandardMaterial({color:opts.boot!=null?opts.boot:BOOTS[0], roughness:.30, metalness:.24});
+
+  /* Bench figures are seen head-and-shoulders over an advertising board
+     and never move, so they are built without the small joint detail. It
+     is ten meshes each, and there are fourteen of them. */
+  const lod = !!opts.simple;
   const parts = [];
-  const add = (mesh, parent)=>{ (parent||g).add(mesh); mesh.castShadow = true; parts.push(mesh); return mesh; };
+  const add = (geo, mat, parent)=>{
+    const m = new THREE.Mesh(geo, mat); (parent||root).add(m);
+    m.castShadow = !lod; parts.push(m); return m;
+  };
+  const detail = (geo, mat, parent)=> lod ? null : add(geo, mat, parent);
 
-  // torso: oval cross-section, tapered to the waist
-  const torso = add(new THREE.Mesh(
-    G('torso', ()=>new THREE.CylinderGeometry(.20,.165,.60,12,1)), shirtMat));
-  torso.position.y = 1.16; torso.scale.z = .62;
-  // shoulders
-  const shoulder = add(new THREE.Mesh(G('shldr', ()=>new THREE.SphereGeometry(.115,10,8)), shirtMat), torso);
-  shoulder.position.set(0,.28,0); shoulder.scale.set(1.65,.8,.72);
-  // head
-  const neck = add(new THREE.Mesh(G('neck', ()=>new THREE.CylinderGeometry(.055,.06,.1,8)), skinMat), torso);
-  neck.position.y = .34;
-  const headPivot = new THREE.Group(); headPivot.position.y = 1.58; g.add(headPivot);
-  const head = add(new THREE.Mesh(G('head', ()=>new THREE.SphereGeometry(.115,14,12)), skinMat), headPivot);
-  head.scale.set(.92,1.1,1);
-  const hair = add(new THREE.Mesh(
-    G('hair', ()=>new THREE.SphereGeometry(.122,12,10,0,Math.PI*2,0,Math.PI*0.62)), hairMat), headPivot);
-  hair.position.y = .012; hair.scale.set(.95,1.05,1.02);
+  // ---- pelvis, in shorts ----
+  const pelvis = add(G('pel'+key, ()=>limbGeo(H*0.074*build, H*0.068*build, H*0.120, 16)), shortMat);
+  pelvis.position.y = H*0.046; pelvis.scale.z = .88;
 
-  // arms
+  // ---- torso: its own node so a lean never drags the legs with it ----
+  const torso = new THREE.Group(); root.add(torso);
+  const shY = H*PROP.torso;
+  const chest = add(G('trs'+key, ()=>torsoGeo(H,build)), shirtMat, torso);
+  chest.scale.z = .82;                            // a chest is wider than it is deep
+  const yoke = detail(G('yok'+key, ()=>limbGeo(H*0.050*build, H*0.050*build, H*PROP.shoulder*1.55, 12)), shirtMat, torso);
+  if(yoke){
+    yoke.position.set(H*PROP.shoulder*0.775, shY*0.905, 0);
+    yoke.rotation.z = -Math.PI/2; yoke.scale.z = .86;   // -90 deg lays it out along -X
+  }
+  const neck = detail(G('nek'+key, ()=>limbGeo(H*0.030, H*0.038, H*PROP.neck*2.3, 12)), skinMat, torso);
+  if(neck) neck.position.y = shY + H*PROP.neck*2.0;
+
+  const headPivot = new THREE.Group();
+  headPivot.position.y = shY + H*PROP.neck*1.05;
+  torso.add(headPivot);
+  const head = add(G('hed'+key, ()=>new THREE.SphereGeometry(H*PROP.headR, 18, 14)), skinMat, headPivot);
+  head.position.y = H*0.062; head.scale.set(.90,1.07,.96);
+  if(!lod){
+    const ear = G('ear'+key, ()=>new THREE.SphereGeometry(H*0.017, 6, 5));
+    for(const s of [-1,1]){
+      const e = add(ear, skinMat, headPivot);
+      e.position.set(s*H*PROP.headR*0.88, H*0.058, -H*0.004); e.scale.set(.5,1.1,.85);
+    }
+  }
+  addHair(headPivot, opts.hairStyle==null?0:opts.hairStyle, H*PROP.headR, hairMat, trimMat)
+    .forEach(m=>{ m.position.y += H*0.062; m.castShadow = true; parts.push(m); });
+
+  // ---- arms: skin all the way, with a kit sleeve laid over the top ----
+  /* The deltoid cap is the load-bearing part of this. Without it the
+     upper arm starts inside the chest and the figure reads as a torso
+     with two tubes stuck through it; with it, the arm visibly hangs off
+     a shoulder. It is parented to the shoulder pivot because a real
+     deltoid travels with the humerus, not with the ribcage. */
   const arms = [];
   for(const s of [-1,1]){
-    const sh = new THREE.Group(); sh.position.set(s*.24,1.4,0); g.add(sh);
-    const up = add(new THREE.Mesh(G('uarm', ()=>new THREE.CylinderGeometry(.055,.045,.30,8)), sleeveMat), sh);
-    up.position.y = -.15;
-    const el = new THREE.Group(); el.position.y = -.30; sh.add(el);
-    const fo = add(new THREE.Mesh(G('farm', ()=>new THREE.CylinderGeometry(.045,.038,.30,8)), skinMat), el);
-    fo.position.y = -.15;
-    const hand = add(new THREE.Mesh(G('hand', ()=>new THREE.SphereGeometry(.05,8,6)), skinMat), el);
-    hand.position.y = -.31; hand.scale.set(.8,1.1,.6);
-    arms.push({sh, el});
+    const sh = new THREE.Group();
+    sh.position.set(s*H*PROP.shoulder*0.86, shY*0.955, 0);
+    torso.add(sh);
+    const delt = add(G('dlt'+key, ()=>new THREE.SphereGeometry(H*0.040*build, 14, 10)), sleeveMat, sh);
+    delt.position.y = -H*0.022; delt.scale.set(1.04,1.14,0.96);
+    add(G('ua'+key, ()=>limbGeo(H*0.034*build, H*0.026*build, H*PROP.upperArm, 10)), skinMat, sh);
+    const slv = detail(G('slv'+key, ()=>limbGeo(H*0.042*build, H*0.033*build, H*PROP.upperArm*0.50, 10)), sleeveMat, sh);
+    if(slv) slv.position.y = -H*0.004;
+
+    const el = new THREE.Group(); el.position.y = -H*PROP.upperArm; sh.add(el);
+    const elbow = detail(G('elb'+key, ()=>new THREE.SphereGeometry(H*0.026*build, 9, 7)), skinMat, el);
+    if(elbow) elbow.scale.set(1,.95,1);
+    add(G('fa'+key, ()=>limbGeo(H*0.026*build, H*0.019*build, H*PROP.foreArm, 10)), skinMat, el);
+    const hand = add(G('hnd'+key, ()=>new THREE.SphereGeometry(H*0.026, 9, 7)),
+                     opts.gloves ? trimMat : skinMat, el);
+    hand.position.y = -H*(PROP.foreArm+0.018);
+    hand.scale.set(opts.gloves?1.5:1.00, 1.30, opts.gloves?1.0:0.66);
+    arms.push({sh, el, hand});
   }
-  // legs
+
+  // ---- legs: hip -> knee -> ankle, each a real pivot ----
   const legs = [];
   for(const s of [-1,1]){
-    const hip = new THREE.Group(); hip.position.set(s*.11,.86,0); g.add(hip);
-    const short = add(new THREE.Mesh(G('short', ()=>new THREE.CylinderGeometry(.105,.088,.26,8)), shortMat), hip);
-    short.position.y = -.09; short.scale.z = .95;
-    const thigh = add(new THREE.Mesh(G('thigh', ()=>new THREE.CylinderGeometry(.078,.062,.40,8)), skinMat), hip);
-    thigh.position.y = -.28;
-    const knee = new THREE.Group(); knee.position.y = -.46; hip.add(knee);
-    const shin = add(new THREE.Mesh(G('shin', ()=>new THREE.CylinderGeometry(.062,.045,.40,8)), sockMat), knee);
-    shin.position.y = -.20;
-    const boot = add(new THREE.Mesh(G('boot', ()=>new THREE.BoxGeometry(.1,.07,.24)), bootMat), knee);
-    boot.position.set(0,-.41,.05);
-    legs.push({hip, knee, boot});
+    const hip = new THREE.Group();
+    hip.position.set(s*H*0.048*build, -H*0.016, 0);
+    root.add(hip);
+    add(G('th'+key, ()=>limbGeo(H*0.046*build, H*0.034*build, H*PROP.thigh, 16)), skinMat, hip);
+    const leg0 = add(G('sl'+key, ()=>limbGeo(H*0.056*build, H*0.050*build, H*PROP.thigh*0.70, 16)), shortMat, hip);
+    leg0.position.y = H*0.030; leg0.scale.z = .95;
+
+    const knee = new THREE.Group(); knee.position.y = -H*PROP.thigh; hip.add(knee);
+    const cap = detail(G('kc'+key, ()=>new THREE.SphereGeometry(H*0.030*build, 14, 10)), skinMat, knee);
+    if(cap) cap.scale.set(1,.90,1);
+    add(G('shn'+key, ()=>limbGeo(H*0.035*build, H*0.023*build, H*PROP.shin, 16)), skinMat, knee);
+    const sock = add(G('sok'+key, ()=>limbGeo(H*0.042*build, H*0.028*build, H*PROP.shin*0.88, 16)), sockMat, knee);
+    sock.position.y = -H*PROP.shin*0.15;
+
+    const ankle = new THREE.Group(); ankle.position.y = -H*PROP.shin; knee.add(ankle);
+    const boot = add(G('bt'+key, ()=>bootGeo(H*PROP.foot*0.90, H*0.041*build, H*0.026)), bootMat, ankle);
+    boot.position.y = -H*0.039;   // drops the sole onto the turf with the leg straight
+    boot.position.z = -H*0.008;
+    legs.push({hip, knee, ankle, boot});
   }
-  return {group:g, arms, legs, headPivot, parts};
+
+  return {group:g, lean, root, torso, arms, legs, headPivot, parts, H, build,
+          hipY:H*PROP.hip, legLen:H*(PROP.thigh+PROP.shin)};
 }
+
+/* ---- static poses for the technical area ----
+   These are props, not actors: they are never handed to animate(), so
+   they can own root.position.y outright. Both obey the same joint rules
+   as everything else — hips flex negative, knees flex positive. */
+function seatPose(body, lean){
+  const b = body, H = b.H;
+  for(let i=0;i<2;i++){
+    b.legs[i].hip.rotation.x   = -1.46;          // thigh forward to horizontal
+    b.legs[i].knee.rotation.x  =  1.50;          // shin straight back down
+    b.legs[i].ankle.rotation.x =  0.12;
+    b.legs[i].hip.rotation.z   = (i?1:-1)*0.09;
+    b.arms[i].sh.rotation.x    = -0.50;
+    b.arms[i].sh.rotation.z    = OUT(i)*0.24;
+    b.arms[i].el.rotation.x    = -1.30;
+  }
+  b.torso.rotation.x = lean==null ? 0.12 : lean;
+  // hips ride at seat height, which is exactly a shin off the floor
+  b.root.position.y  = H*PROP.shin;
+  b.headPivot.rotation.x = -0.06;
+}
+function standPose(body){
+  const b = body;
+  for(let i=0;i<2;i++){
+    b.legs[i].hip.rotation.x   = -0.04 + (i?0.10:-0.10);
+    b.legs[i].knee.rotation.x  =  0.10;
+    b.legs[i].ankle.rotation.x =  0.02;
+    b.legs[i].hip.rotation.z   = (i?1:-1)*0.05;
+    b.arms[i].sh.rotation.x    = -0.62;          // arms folded across the chest
+    b.arms[i].sh.rotation.z    = OUT(i)*0.30;
+    b.arms[i].el.rotation.x    = -1.95;
+  }
+  b.torso.rotation.x = 0.05;
+  b.headPivot.rotation.x = -0.04;
+}
+
+/* buildWorld() populates the dugouts with real bodies, so it has to run
+   after the player-model definitions above rather than beside the rest
+   of the scene setup. */
+const LIGHTS = buildWorld();
 
 /* ================== entities ================== */
 const players = [];
@@ -699,17 +1623,42 @@ function attrs(role){
     pass: (role==='CM'||role==='DM'?0.78:0.55) + Math.random()*0.2
   };
 }
+/* Every figure gets a soft contact blob. With shadows on it doubles as
+   ambient occlusion at the feet; with shadows off (LITE, or a phone that
+   auto-tuned down) it is the only thing keeping players on the ground
+   rather than hovering over it. */
+function addContact(body, H){
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(H*0.42, H*0.30),
+    new THREE.MeshBasicMaterial({map:BLOB_TEX, transparent:true, depthWrite:false, opacity:.42}));
+  m.rotation.x = -Math.PI/2; m.position.y = .012;
+  body.group.add(m); body.contact = m;
+}
+
 function makePlayer(team, i){
   const [role,fx,fz] = FORMATION[i];
   const isGK = role==='GK';
-  const kit = isGK ? GK_KIT : TEAMS[team];
-  const body = buildBody(kit, i+1, {boot: team? 0x14202e : 0x1b1b22});
+  const kit = isGK ? GK_KITS[team] : TEAMS[team];
+  const ph = physique(role);
+  const name = TEAMS[team].names[i];
+  const body = buildBody(kit, i+1, {
+    height:ph.h, build:ph.build, name,
+    skin:  SKIN[(Math.random()*SKIN.length)|0],
+    hair:  HAIR[(Math.random()*HAIR.length)|0],
+    hairStyle: (Math.random()*7)|0,
+    boot:  BOOTS[(Math.random()*BOOTS.length)|0],
+    gloves: isGK
+  });
   scene.add(body.group);
-  return { team, role, isGK, idx:i, num:i+1, name:TEAMS[team].names[i],
+  addContact(body, ph.h);
+  const a = attrs(role);
+  a.pace *= 1.04 - ph.build*0.04;              // carrying more slows a man down a little
+  return { team, role, isGK, idx:i, num:i+1, name,
+    H:ph.h, build:ph.build, reach:ph.h/1.82,
     slot:new THREE.Vector2(fx,fz), pos:new THREE.Vector2(0,0), vel:new THREE.Vector2(0,0),
-    face:0, stamina:100, phase:Math.random()*6, touch:0, lunge:0, cool:0,
+    face:0, stamina:100, phase:Math.random()*6.283, touch:0, lunge:0, cool:0,
     think:Math.random()*.3, react:0, seen:null, kickAnim:0, celeb:0,
-    attr:attrs(role), body, mesh:body.group };
+    dive:0, diveDir:1, diveHigh:0, footed: Math.random()<.24 ? 1 : 0,
+    attr:a, body, mesh:body.group };
 }
 for(let t=0;t<2;t++) for(let i=0;i<11;i++) players.push(makePlayer(t,i));
 function teamOf(t){ return players.filter(p=>p.team===t); }
@@ -718,11 +1667,20 @@ function keeperOf(t){ return players.find(p=>p.team===t && p.isGK); }
 // match officials
 const officials = [];
 function makeOfficial(kind){
-  const kit = {shirt:'#101318', trim:'#e9ff4a', shorts:'#101318', socks:'#101318', stripe:false};
-  const body = buildBody(kit, null, {boot:0x0a0a0c});
+  const kit = {shirt:'#101318', trim:'#e9ff4a', shorts:'#101318', socks:'#101318',
+               sleeve:'#1b1f27', pattern:'none', numberInk:'#e9ff4a'};
+  const ph = physique('M');
+  const body = buildBody(kit, null, {
+    height:ph.h*0.99, build:ph.build*1.03, boot:0x0a0a0c,
+    skin: SKIN[(Math.random()*SKIN.length)|0],
+    hair: HAIR[(Math.random()*HAIR.length)|0],
+    hairStyle: [1,4,0][(Math.random()*3)|0]
+  });
   scene.add(body.group);
+  addContact(body, ph.h);
   return { kind, pos:new THREE.Vector2(0, kind==='ref'?6:HALF_W+1.4), vel:new THREE.Vector2(),
-    face:0, phase:0, body, mesh:body.group, isOfficial:true };
+    face:0, phase:0, H:ph.h, body, mesh:body.group, isOfficial:true,
+    kickAnim:0, lunge:0, dive:0, celeb:0, isGK:false };
 }
 officials.push(makeOfficial('ref'), makeOfficial('ar1'), makeOfficial('ar2'));
 officials[1].pos.set(-20, -(HALF_W+1.6));
@@ -771,10 +1729,18 @@ function movePlayer(p, want, sprint, dt){
     while(d<-Math.PI) d+=Math.PI*2;
     p.face += THREE.MathUtils.clamp(d,-9*dt,9*dt);
   }
-  p.phase += spd*dt*2.3;
+  /* Cadence, not "phase proportional to speed". A footballer's stride
+     RATE only climbs from about two steps a second to five; the rest of
+     the extra ground speed comes from stride LENGTH, which is the swing
+     amplitude in animate(). Driving phase straight off speed gave a
+     jog that twinkled and a sprint that scissored. */
+  const runN = Math.min(1, spd/CFG.SPRINT);
+  p.phase += (1.15 + runN*1.85) * Math.PI*2 * dt;
+  if(p.phase > Math.PI*2) p.phase -= Math.PI*2;
   p.lunge = Math.max(0,p.lunge-dt);
   p.cool = Math.max(0,p.cool-dt);
   p.kickAnim = Math.max(0,p.kickAnim-dt);
+  p.dive = Math.max(0,(p.dive||0)-dt);
 }
 
 function separate(){
@@ -788,73 +1754,191 @@ function separate(){
   }
 }
 
+/* A smooth 0..1 hump centred on `c`, `w` wide, wrapping around the gait
+   cycle. Poses built out of these can never go negative, which is how the
+   knee is guaranteed to stay on the correct side of the joint. */
+const TAU = Math.PI*2;
+function bump(u, c, w){
+  let d = Math.abs(u-c); d = Math.min(d, 1-d);
+  if(d >= w) return 0;
+  const k = Math.cos((d/w)*Math.PI/2);
+  return k*k;
+}
+const lerp = THREE.MathUtils.lerp, clamp = THREE.MathUtils.clamp;
+
 function animate(p, dt){
   const b = p.body, spd = p.vel.length();
+  const run = Math.min(1, spd/CFG.SPRINT);
+  const gait = clamp((spd-0.30)/1.30, 0, 1);      // fades the stride out to a stand
+  const u = (p.phase/TAU) % 1;                    // 0 = right foot strike
+  const amp = (0.18 + run*0.52) * gait;
+  const t = performance.now()/1000;
+
   b.group.position.set(p.pos.x, 0, p.pos.y);
   b.group.rotation.y = -p.face + Math.PI/2;
-  const run = Math.min(1, spd/CFG.SPRINT);
-  const amp = .28 + run*.72;
-  const sw = Math.sin(p.phase);
-  const swb = Math.sin(p.phase+Math.PI);
+  b.lean.rotation.set(0,0,0);
+  b.lean.position.y = 0;
 
-  // legs: hip drives the stride, knee only folds backwards
-  b.legs[0].hip.rotation.x = sw*amp*.85;
-  b.legs[1].hip.rotation.x = swb*amp*.85;
-  b.legs[0].knee.rotation.x = -Math.max(0, -sw)*amp*1.25 - run*.12;
-  b.legs[1].knee.rotation.x = -Math.max(0, -swb)*amp*1.25 - run*.12;
-  b.legs[0].boot.rotation.x = Math.max(0,sw)*.35;
-  b.legs[1].boot.rotation.x = Math.max(0,swb)*.35;
+  /* ---- pelvis: drops through mid-stance, rises into the float, and
+     counter-rotates against the shoulders. That counter-rotation is the
+     single strongest cue that a figure is running rather than sliding. */
+  const bob = (Math.cos(2*TAU*u)*0.5 + 0.5);
+  b.root.position.y = b.hipY - b.H*(0.008 + 0.030*run)*bob*gait;
+  b.root.rotation.y =  Math.sin(TAU*u)*0.13*gait;
+  b.root.rotation.z =  Math.sin(TAU*u)*0.05*gait;
 
-  // arms counter-swing with a fixed elbow bend
-  b.arms[0].sh.rotation.x = -swb*amp*.62;
-  b.arms[1].sh.rotation.x = -sw*amp*.62;
-  b.arms[0].sh.rotation.z =  .13 + run*.16;
-  b.arms[1].sh.rotation.z = -.13 - run*.16;
-  b.arms[0].el.rotation.x = -.5 - run*.5;
-  b.arms[1].el.rotation.x = -.5 - run*.5;
+  /* ---- legs ----
+     hip:   negative reaches forward, positive drives back
+     knee:  ALWAYS >= 0 — small flex absorbing the stance, a big fold
+            through the swing as the heel comes up to the backside
+     ankle: plantarflexes at push-off, dorsiflexes to clear the ground  */
+  for(let i=0;i<2;i++){
+    const L = b.legs[i];
+    const lu = (u + i*0.5) % 1;                   // legs half a cycle apart
+    L.hip.rotation.x   = amp*(-Math.cos(TAU*lu)) - amp*0.16*Math.sin(2*TAU*lu) + run*0.10*gait;
+    L.hip.rotation.z   = 0; L.hip.rotation.y = 0;
+    L.knee.rotation.x  = amp*(0.34*bump(lu,0.26,0.30) + 1.70*bump(lu,0.72,0.27))
+                       + 0.05 + run*0.10*gait;
+    L.ankle.rotation.x = amp*(0.78*bump(lu,0.44,0.20) - 0.42*bump(lu,0.74,0.30));
+    L.ankle.rotation.z = 0;
+  }
 
-  // torso lean + sway
-  b.group.children[0].rotation.x = run*.2 + (p.kickAnim>0?-.12:0);
-  b.group.children[0].rotation.z = Math.sin(p.phase)*run*.045;
+  /* ---- torso: leans into the run, counter-rotates against the hips ---- */
+  b.torso.rotation.x = run*0.22 + 0.03;
+  b.torso.rotation.y = -Math.sin(TAU*u)*0.20*gait;
+  b.torso.rotation.z = -Math.sin(TAU*u)*0.045*gait;
 
-  // head tracks the ball
+  /* ---- arms: opposite the leg on the same side; the elbow only ever
+     folds FORWARD, so its rotation.x is negative throughout ---- */
+  for(let i=0;i<2;i++){
+    const A = b.arms[i], s = i? 1 : -1;
+    const au = (u + i*0.5) % 1;
+    /* The upper arm carries a backward bias. Without it the arm hangs
+       vertically at the mid-swing crossing and a correctly-flexed elbow
+       throws the forearm straight out horizontally — which is exactly
+       what "the arms are hanging off" looked like. */
+    A.sh.rotation.x = amp*0.62*Math.cos(TAU*au) + run*0.16*gait;
+    A.sh.rotation.z = OUT(i)*(0.10 + run*0.13);
+    A.sh.rotation.y = 0;
+    A.el.rotation.x = -(0.42 + run*0.52 + 0.34*bump(au,0.5,0.5)*gait);
+    A.el.rotation.z = 0;
+  }
+
+  /* ---- idle: weight shift and breathing, so a stood-still player is
+     not a mannequin between phases of play ---- */
+  if(gait < 0.98){
+    const q = 1-gait, br = Math.sin(t*1.5 + p.phase)*0.5+0.5;
+    for(let i=0;i<2;i++){
+      b.legs[i].knee.rotation.x += q*(0.14 + br*0.03);
+      b.legs[i].hip.rotation.x  += q*(-0.05 + (i? 0.04 : -0.04)*Math.sin(t*0.7+p.phase));
+      b.arms[i].sh.rotation.x   += q*(0.04*Math.sin(t*1.1+p.phase+i));
+      b.arms[i].el.rotation.x   -= q*0.22;
+    }
+    b.root.rotation.z += q*Math.sin(t*0.7+p.phase)*0.03;
+    b.torso.rotation.x += q*0.02*br;
+  }
+
+  /* ---- head follows the ball, within a neck's worth of travel ---- */
   let ha = Math.atan2(ball.pos.z-p.pos.y, ball.pos.x-p.pos.x) - p.face;
-  while(ha>Math.PI) ha-=Math.PI*2;
-  while(ha<-Math.PI) ha+=Math.PI*2;
-  b.headPivot.rotation.y = THREE.MathUtils.clamp(-ha, -1.1, 1.1);
-  b.headPivot.rotation.x = THREE.MathUtils.clamp((ball.pos.y-1.5)*.12, -.25, .35);
+  while(ha>Math.PI) ha-=TAU;
+  while(ha<-Math.PI) ha+=TAU;
+  b.headPivot.rotation.y = clamp(-ha, -1.15, 1.15);
+  b.headPivot.rotation.x = clamp((ball.pos.y - b.H*0.83)*0.16, -.28, .40) - b.torso.rotation.x*0.7;
+  b.headPivot.rotation.z = -b.torso.rotation.z*0.6;
 
-  // strike pose
+  /* ---- striking the ball: plant, cock, whip through, follow ----
+     kickAnim runs 0.34 -> 0, so k walks 0 -> 1 across the strike. The
+     knee values are keyframed and every one of them is positive. */
   if(p.kickAnim > 0){
-    const k = p.kickAnim/.34;                       // 1 -> 0 through the swing
-    const swing = Math.sin((1-k)*Math.PI);
-    b.legs[0].hip.rotation.x = -1.1*swing + .3;
-    b.legs[0].knee.rotation.x = -1.0*(1-swing)*.8;
-    b.legs[1].hip.rotation.x = .35*swing;
-    b.arms[1].sh.rotation.x = -.8*swing;
+    const k = 1 - p.kickAnim/.34;
+    const K = b.legs[p.footed], P = b.legs[1-p.footed];
+    const hipK  = k<.34 ? lerp(0.10, 0.78, k/.34) : lerp(0.78, -1.02, (k-.34)/.66);
+    const kneeK = k<.34 ? lerp(0.30, 1.62, k/.34)
+                : k<.70 ? lerp(1.62, 0.10, (k-.34)/.36)
+                        : lerp(0.10, 0.42, (k-.70)/.30);
+    K.hip.rotation.x   = hipK;
+    K.knee.rotation.x  = Math.max(0, kneeK);
+    K.ankle.rotation.x = 0.30 + 0.35*Math.sin(k*Math.PI);
+    P.hip.rotation.x   = lerp(-0.28, 0.16, k);        // plant foot beside the ball
+    P.knee.rotation.x  = 0.24 + 0.22*Math.sin(k*Math.PI);
+    P.ankle.rotation.x = 0.05;
+    b.root.position.y  = b.hipY - b.H*0.020*Math.sin(k*Math.PI);
+    b.torso.rotation.x = -0.22*Math.sin(k*Math.PI) + 0.30*Math.max(0,k-.55);
+    b.torso.rotation.y = (p.footed? -1:1)*0.34*Math.sin(k*Math.PI);
+    // the opposite arm swings across as a counterweight
+    const CA = b.arms[p.footed], SA = b.arms[1-p.footed];
+    SA.sh.rotation.x = -1.05*Math.sin(k*Math.PI); SA.sh.rotation.z = OUT(1-p.footed)*0.50;
+    CA.sh.rotation.x =  0.55*Math.sin(k*Math.PI); CA.sh.rotation.z = OUT(p.footed)*0.20;
+    SA.el.rotation.x = -0.75; CA.el.rotation.x = -0.55;
   }
-  // lunging tackle
+
+  /* ---- sliding tackle: leg extended along the ground, trailing leg
+     folded under, body pitched back onto the hip ---- */
   if(p.lunge > 0){
-    b.group.children[0].rotation.x = .55;
-    b.legs[1].hip.rotation.x = -1.2;
-    b.legs[1].knee.rotation.x = 0;
+    const k = 1 - p.lunge/.35;
+    b.lean.rotation.x = 0.80 + 0.25*k;
+    b.lean.position.y = -b.H*0.20;
+    const A = b.legs[0], B = b.legs[1];
+    A.hip.rotation.x = -1.30; A.knee.rotation.x = 0.08; A.ankle.rotation.x = -0.25;
+    B.hip.rotation.x = -0.30; B.knee.rotation.x = 1.45; B.ankle.rotation.x = 0.30;
+    b.torso.rotation.x = -0.45; b.torso.rotation.y = 0.25;
+    b.arms[0].sh.rotation.x = 0.85; b.arms[1].sh.rotation.x = 0.55;
+    b.arms[0].sh.rotation.z = OUT(0)*0.75; b.arms[1].sh.rotation.z = OUT(1)*0.75;
+    b.arms[0].el.rotation.x = -0.30; b.arms[1].el.rotation.x = -0.30;
+    if(!p._sprayed && spd > 3){ p._sprayed = true;
+      SPRAY.burst(p.pos.x, p.pos.y, -Math.cos(p.face), -Math.sin(p.face)); }
+  } else p._sprayed = false;
+
+  /* ---- goalkeeping ---- */
+  if(p.isGK && p.dive > 0){
+    const k = 1 - p.dive/.85;
+    const air = Math.sin(Math.min(1,k*1.25)*Math.PI);       // up, across, down
+    b.lean.rotation.z = p.diveDir * (1.35*Math.min(1,k*2.4));
+    b.lean.rotation.x = -0.15*air;
+    b.lean.position.y = b.H*(0.30*air*(p.diveHigh?1:0.35)) - b.H*0.10*Math.max(0,k-.75)*4;
+    for(let i=0;i<2;i++){
+      b.arms[i].sh.rotation.x = -2.35 - 0.25*air;           // both hands to the ball
+      b.arms[i].sh.rotation.z = OUT(i)*0.18;
+      b.arms[i].el.rotation.x = -0.12;
+      b.legs[i].hip.rotation.x = -0.55 + i*0.35;
+      b.legs[i].knee.rotation.x = 0.55 + i*0.30;
+      b.legs[i].ankle.rotation.x = 0.25;
+    }
+    b.torso.rotation.set(-0.15, 0, 0);
+  } else if(p.isGK && spd < 1.7 && p.kickAnim<=0 && p.celeb<=0){
+    // set position: on the toes, hands up, weight forward
+    const br = Math.sin(t*2.4 + p.phase)*0.5+0.5;
+    for(let i=0;i<2;i++){
+      b.arms[i].sh.rotation.x = -0.62 - br*0.06;
+      b.arms[i].sh.rotation.z = OUT(i)*1.02;
+      b.arms[i].el.rotation.x = -1.15;
+      b.legs[i].knee.rotation.x = 0.42 + br*0.05;
+      b.legs[i].hip.rotation.x = -0.18;
+      b.legs[i].ankle.rotation.x = 0.10;
+    }
+    b.torso.rotation.x = 0.16;
+    b.root.position.y = b.hipY - b.H*0.030;
   }
-  // goalkeeper set position
-  if(p.isGK && spd < 1.6){
-    b.arms[0].sh.rotation.z = .95; b.arms[1].sh.rotation.z = -.95;
-    b.arms[0].sh.rotation.x = -.35; b.arms[1].sh.rotation.x = -.35;
-    b.arms[0].el.rotation.x = -.9;  b.arms[1].el.rotation.x = -.9;
-    b.legs[0].knee.rotation.x = -.3; b.legs[1].knee.rotation.x = -.3;
-  }
-  // celebration
+
+  /* ---- celebration ---- */
   if(p.celeb > 0){
-    b.arms[0].sh.rotation.x = -2.5; b.arms[1].sh.rotation.x = -2.5;
-    b.arms[0].sh.rotation.z = .5;   b.arms[1].sh.rotation.z = -.5;
-    b.arms[0].el.rotation.x = -.2;  b.arms[1].el.rotation.x = -.2;
+    const c = Math.min(1, p.celeb/0.4);
+    const wave = Math.sin(t*7 + p.idx)*0.22;
+    for(let i=0;i<2;i++){
+      b.arms[i].sh.rotation.x = lerp(b.arms[i].sh.rotation.x, -2.45 + wave, c);
+      b.arms[i].sh.rotation.z = lerp(b.arms[i].sh.rotation.z, OUT(i)*0.55, c);
+      b.arms[i].el.rotation.x = lerp(b.arms[i].el.rotation.x, -0.18, c);
+    }
+    b.torso.rotation.x = lerp(b.torso.rotation.x, -0.16, c);
+    b.headPivot.rotation.x = lerp(b.headPivot.rotation.x, -0.30, c);
     p.celeb -= dt;
   }
-  // shadow budget: only near the action
-  const near = Math.abs(p.pos.x-ball.pos.x)<40 && Math.abs(p.pos.y-ball.pos.z)<30;
+
+  // contact blob softens as he leaves the ground
+  if(b.contact) b.contact.material.opacity = 0.42 * (1 - Math.min(1, Math.max(0,b.lean.position.y)/(b.H*0.3)));
+
+  // shadow budget: only cast near the action
+  const near = Math.abs(p.pos.x-ball.pos.x)<42 && Math.abs(p.pos.y-ball.pos.z)<32;
   if(b._shadow !== near){
     b._shadow = near;
     for(const m of b.parts) m.castShadow = near && S.quality===1;
@@ -877,6 +1961,8 @@ function stepOfficials(dt){
     movePlayerLite(ar, t2, dt, 6.0);
   }
 }
+/* Officials run the same rig and the same cycle as the players — there is
+   no reason for the referee to move worse than the men he is following. */
 function movePlayerLite(o, target, dt, maxS){
   const to = target.clone().sub(o.pos);
   const d = to.length();
@@ -884,22 +1970,17 @@ function movePlayerLite(o, target, dt, maxS){
   o.vel.lerp(want, Math.min(1, dt*4));
   o.pos.addScaledVector(o.vel, dt);
   const spd = o.vel.length();
-  if(spd>.3) o.face += THREE.MathUtils.clamp(Math.atan2(o.vel.y,o.vel.x)-o.face, -6*dt, 6*dt);
-  o.phase += spd*dt*2.3;
-  animateLite(o);
+  if(spd>.3){
+    let da = Math.atan2(o.vel.y,o.vel.x) - o.face;   // wrap, or he spins on the turn
+    while(da> Math.PI) da-=TAU;
+    while(da<-Math.PI) da+=TAU;
+    o.face += THREE.MathUtils.clamp(da, -6*dt, 6*dt);
+  }
+  o.phase += (1.15 + Math.min(1,spd/CFG.SPRINT)*1.85) * TAU * dt;
+  if(o.phase > TAU) o.phase -= TAU;
+  animate(o, dt);
 }
-function animateLite(o){
-  const b=o.body, spd=o.vel.length(), run=Math.min(1,spd/CFG.SPRINT);
-  b.group.position.set(o.pos.x,0,o.pos.y);
-  b.group.rotation.y = -o.face + Math.PI/2;
-  const amp=.28+run*.72, sw=Math.sin(o.phase), swb=-sw;
-  b.legs[0].hip.rotation.x=sw*amp*.85; b.legs[1].hip.rotation.x=swb*amp*.85;
-  b.legs[0].knee.rotation.x=-Math.max(0,-sw)*amp*1.2;
-  b.legs[1].knee.rotation.x=-Math.max(0,-swb)*amp*1.2;
-  b.arms[0].sh.rotation.x=-swb*amp*.6; b.arms[1].sh.rotation.x=-sw*amp*.6;
-  b.arms[0].sh.rotation.z=.13; b.arms[1].sh.rotation.z=-.13;
-  b.arms[0].el.rotation.x=-.5; b.arms[1].el.rotation.x=-.5;
-}
+function animateLite(o){ animate(o, 0); }
 
 /* ================== kicks ================== */
 const ZERO = new THREE.Vector2(0,0);
@@ -1019,8 +2100,9 @@ function resolvePossession(){
   for(const p of players){
     if(p.cool>0) continue;
     const d = dist2D(p);
-    const reach = CFG.CTRL_R + (p.lunge>0?1.1:0) + (p.isGK?1.25:0);
-    if(d>reach || ball.pos.y > (p.isGK?2.55:1.5)) continue;
+    // a taller man covers more ground with the same step, and gets higher
+    const reach = (CFG.CTRL_R + (p.lunge>0?1.1:0) + (p.isGK?1.25:0)) * p.reach;
+    if(d>reach || ball.pos.y > (p.isGK?2.55:1.5)*p.reach) continue;
     let score = d;
     if(p===owner) score -= .65;
     else if(owner && p.team===owner.team) score += .5;
@@ -1046,7 +2128,15 @@ function resolvePossession(){
   if(S.liveShot && S.liveShot.team!==best.team && ball.vel.length()>10){
     const line = S.dir[best.team]*-HALF_L;
     const inBox = Math.abs(ball.pos.x-line)<CFG.PEN_D && Math.abs(ball.pos.z)<CFG.PEN_W/2;
-    if(best.isGK){ S.stats.onTarget[S.liveShot.team]++; S.liveShot = null; }
+    if(best.isGK){
+      S.stats.onTarget[S.liveShot.team]++; S.liveShot = null;
+      // throw him at it — sideways relative to the way he is facing
+      const sideDot = (ball.pos.x-best.pos.x)*(-Math.sin(best.face))
+                    + (ball.pos.z-best.pos.y)*( Math.cos(best.face));
+      best.dive = .85; best.diveDir = sideDot>=0 ? 1 : -1;
+      best.diveHigh = ball.pos.y > 1.15 ? 1 : 0;
+      cutTo('save', 1.6);
+    }
     if(inBox && Math.random() < (best.isGK ? .5 : .45)){
       const away = -S.dir[best.team];              // put it behind for a corner
       ball.vel.set(away*9, 2.6, (Math.random()-.5)*12);
@@ -1229,6 +2319,7 @@ function checkRules(){
   for(const s of [-1,1]){
     if(s*b.x > HALF_L+CFG.BALL_R*.5 && Math.abs(b.z)<CFG.GOAL_W/2 && b.y<CFG.GOAL_H){
       const scorer = S.dir[0]===s ? 0 : 1;
+      rippleNet(s, ball.pos.z, ball.pos.y);
       S.score[scorer]++;
       const who = S.lastTouch && S.lastTouch.team===scorer ? S.lastTouch : null;
       if(S.liveShot && S.liveShot.team===scorer) S.stats.onTarget[scorer]++;
@@ -1237,7 +2328,7 @@ function checkRules(){
       lowerThird('GOAL', who?who.name:TEAMS[scorer].name, TEAMS[scorer].name+'  ·  '+clockLabel());
       event('GOAL', (who?who.name+' — ':'')+S.score[0]+'-'+S.score[1]);
       if(who){ who.celeb=4; for(const m of teamOf(scorer)) m.celeb=Math.max(m.celeb,2.2); }
-      S.phase='goal'; S.freeze=5.2; S.goalSide=s; S.scorer=who;
+      S.phase='goal'; S.freeze=5.2; S.goalSide=s; S.scorer=who; S.shake=1;
       cutTo('celebration', 5.0);
       return;
     }
@@ -1324,6 +2415,14 @@ function updateCamera(dt){
       lookAt.y = 1.2; ease = 1.5;
       break;
     }
+    case 'save': {          // tight and low on the keeper as he goes down
+      const gk = keeperOf(1-S.possTeam) || null;
+      const c = gk ? new THREE.Vector3(gk.pos.x, 1.1, gk.pos.y) : focus;
+      want.set(c.x + S.dir[S.possTeam]*7.5, 2.6, c.z - 9);
+      lookAt.copy(c); lookAt.y = 1.1;
+      fov = 26; ease = 3.2;
+      break;
+    }
     case 'celebration': {   // low, close, behind the goal that was scored on
       const s = S.goalSide||1;
       const t = S.scorer;
@@ -1340,9 +2439,17 @@ function updateCamera(dt){
       lookAt.y = 0.9; ease = 1.35;
     }
   }
-  // gentle handheld drift so the rig never looks locked
+  /* Handheld drift, plus a kick when the ball is struck hard. A rig that
+     never moves reads as a render; a rig that breathes reads as a camera
+     with an operator behind it. */
   const t = performance.now()/1000;
-  want.x += Math.sin(t*.37)*.16; want.y += Math.sin(t*.53)*.09;
+  want.x += Math.sin(t*.37)*.16 + Math.sin(t*1.7)*.04;
+  want.y += Math.sin(t*.53)*.09 + Math.sin(t*2.1)*.03;
+  S.shake = Math.max(0, (S.shake||0) - dt*2.2);
+  if(S.shake > 0){
+    const k = S.shake*S.shake*0.42;
+    want.x += (Math.random()-.5)*k; want.y += (Math.random()-.5)*k;
+  }
 
   camPos.lerp(want, Math.min(1, dt*ease));
   camLook.lerp(lookAt, Math.min(1, dt*3.4));
@@ -1358,6 +2465,14 @@ function updateCamera(dt){
 
 /* ================== HUD ================== */
 const el = id=>document.getElementById(id);
+function paintBug(){
+  const c = el('bugLogo'); if(!c) return;
+  const g = c.getContext('2d');
+  g.clearRect(0,0,64,64);
+  drawBrandLogo(g, 32, 32, 62);
+  const d = el('bugDomain'); if(d) d.textContent = BRAND.domain;
+}
+paintBug();
 el('abbrA').textContent = TEAMS[0].abbr; el('abbrB').textContent = TEAMS[1].abbr;
 el('crestA').style.background = TEAMS[0].chip; el('crestB').style.background = TEAMS[1].chip;
 el('possFill').style.background = TEAMS[0].chip;
@@ -1420,8 +2535,14 @@ let last = performance.now(), acc = 0, fpsAcc = 0, fpsN = 0, autoTuned = false;
 function frame(now){
   requestAnimationFrame(frame);
   const raw = Math.min(.05,(now-last)/1000); last = now;
-  if(ledMat && ledMat.map) ledMat.map.offset.x = (now/9000)%1;
-  for(const f of flags) f.rotation.y = Math.sin(now/420+f.position.x)*.35;
+  for(const L of ledTextures) L.t.offset.x = (now/9000)*L.speed % 1;
+  for(const f of flags){
+    f.rotation.y = Math.sin(now/420 + f.position.x)*.38;
+    f.rotation.z = Math.sin(now/260 + f.position.z)*.10;
+  }
+  SPRAY.step(raw);
+  stepNets(raw);
+  FLASH.step(raw, S.phase==='goal' || (S.freeze>0 && S.phase!=='play'));
 
   if(S.running){
     acc += raw*S.speed;
